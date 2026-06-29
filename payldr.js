@@ -2,7 +2,6 @@ import dotenv from "dotenv"
 import cors from "cors"
 import express from "express"
 import fetch from "cross-fetch"
-import tls from "tls"
 
 dotenv.config({ path: 'payldr.env' })
 let PORT = process.env.API_PORT || 9610;
@@ -19,6 +18,7 @@ const generateId = (len = 10) => {
 };
 
 const hosters = {};
+const seeders = {};
 const pendingRequests = {};
 
 setInterval(() => {
@@ -29,7 +29,20 @@ setInterval(() => {
             delete hosters[hostId];
         }
     }
+    for (const seederId in seeders) {
+        try {
+            seeders[seederId].write(': ping\n\n');
+        } catch (e) {
+            delete seeders[seederId];
+        }
+    }
 }, 20000);
+
+
+app.get("/status", async function (req, res) {
+    console.log("Status");
+    return res.json({ service: "api", status: "on", time: Date.now() })
+})
 
 app.get('/payldr/hoster/:hostId', (req, res) => {
     const { hostId } = req.params;
@@ -51,39 +64,70 @@ app.get('/payldr/hoster/:hostId', (req, res) => {
     });
 });
 
-app.post('/payldr/visitor/send', (req, res) => {
-    const { visitorId, hostId, payload } = req.body;
+app.get('/payldr/seeder/:seederId', (req, res) => {
+    const { seederId } = req.params;
 
-    if (!visitorId || !hostId || !payload) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    seeders[seederId] = res;
+    console.log(`Seeder ligado: ${seederId}`);
+
+    res.write(`data: ${JSON.stringify({ tipo: 'SISTEMA', mensagem: `Ligado como ${seederId}` })}\n\n`);
+
+    req.on('close', () => {
+        console.log(`Seeder desligado: ${seederId}`);
+        delete seeders[seederId];
+    });
+});
+
+app.get('/payldr/seeders', (req, res) => {
+    return res.json(Object.keys(seeders));
+});
+
+app.post('/payldr/guest/send', (req, res) => {
+    const { guestId, hostId, payload } = req.body;
+    console.log(`[Server] Recebido /guest/send de ${guestId} para host ${hostId}`);
+
+    if (!guestId || !hostId || !payload) {
+        console.log(`[Server] /guest/send falhou: campos incompletos`);
         return res.status(200).json({ sucesso: false, mensagem: 'Campos incompletos.' });
     }
 
     const hostRes = hosters[hostId];
     if (!hostRes) {
+        console.log(`[Server] /guest/send falhou: hoster ${hostId} offline`);
         return res.status(200).json({ sucesso: false, mensagem: 'Hoster offline ou não encontrado.' });
     }
 
     const requestId = generateId(10);
+    console.log(`[Server] Gerado requestId: ${requestId} para a requisição`);
 
     pendingRequests[requestId] = res;
 
-    req.on('close', () => {
-        if (pendingRequests[requestId]) {
+    res.on('close', () => {
+        if (!res.writableEnded && pendingRequests[requestId]) {
+            console.log(`[Server] Conexão do guest para requestId ${requestId} interrompida pelo cliente`);
             delete pendingRequests[requestId];
         }
     });
 
     const evento = {
         requestId,
-        origem: visitorId,
+        origem: guestId,
         dados: payload,
         timestamp: new Date().toISOString()
     };
 
+    console.log(`[Server] Enviando evento para o hoster ${hostId}`);
     hostRes.write(`data: ${JSON.stringify(evento)}\n\n`);
 
     setTimeout(() => {
         if (pendingRequests[requestId]) {
+            console.log(`[Server] Timeout para requestId ${requestId}`);
             pendingRequests[requestId].status(504).json({
                 sucesso: false,
                 mensagem: 'Timeout: O hoster não respondeu.'
@@ -95,23 +139,27 @@ app.post('/payldr/visitor/send', (req, res) => {
 
 app.post('/payldr/reply', (req, res) => {
     const { requestId, responseData } = req.body;
+    console.log(`[Server] Recebido /reply para requestId: ${requestId}`);
 
-    const visitorRes = pendingRequests[requestId];
+    const guestRes = pendingRequests[requestId];
 
-    if (!visitorRes) {
+    if (!guestRes) {
+        console.log(`[Server] /reply falhou: requestId ${requestId} não encontrado ou expirado`);
         return res.status(200).json({
             sucesso: false,
             mensagem: 'A requisição expirou, foi cancelada ou não existe.'
         });
     }
 
-    visitorRes.status(200).json({
+    console.log(`[Server] Respondendo ao guestRes para requestId: ${requestId}`);
+    guestRes.status(200).json({
         sucesso: true,
         origem: 'hoster',
         dados: responseData
     });
 
     delete pendingRequests[requestId];
+    console.log(`[Server] Finalizando resposta /reply`);
     res.status(200).json({ sucesso: true, mensagem: 'Entregue.' });
 });
 
@@ -176,11 +224,10 @@ function startCertRenewalScheduler() {
         console.log("Iniciando verificação periódica para renovação do certificado SSL...");
         try {
             const certData = await getCerts();
-            const secureContext = tls.createSecureContext({
+            server.setSecureContext({
                 key: certData.priv,
                 cert: certData.cert
             });
-            server.setSecureContext(secureContext);
             console.log("Certificados SSL atualizados dinamicamente com sucesso!");
         } catch (error) {
             console.error("Falha ao renovar o certificado SSL automaticamente:", error.message);

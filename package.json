@@ -4,7 +4,11 @@
   "type": "module",
   "main": "payldr.js",
   "scripts": {
-    "start": "node payldr.js"
+    "start": "node payldr.js",
+    "host": "node host.js",
+    "guest": "node guest.js",
+    "test": "node test.js",
+    "deploy": "node deploy.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
