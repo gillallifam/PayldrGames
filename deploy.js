@@ -12,16 +12,17 @@ const keyPath = `"C:\\Users\\gilla\\OneDrive\\Área de Trabalho\\marketpix\\Orac
 const localFile = path.join(__dirname, 'payldr.js');
 const localPackage = path.join(__dirname, 'package.json');
 const localHtml = path.join(__dirname, 'cadastro.html');
+const localDb = path.join(__dirname, 'db.js');
 const remoteDestDir = 'ubuntu@144.22.213.47:/home/ubuntu/dev/payldr/';
 
 // Comando SCP de etapa única para múltiplos arquivos
-const scpCommand = `scp -i ${keyPath} "${localFile}" "${localPackage}" "${localHtml}" ${remoteDestDir}`;
+const scpCommand = `scp -i ${keyPath} "${localFile}" "${localPackage}" "${localHtml}" "${localDb}" ${remoteDestDir}`;
 
 // Comandos SSH
 const npmInstallCommand = `ssh -i ${keyPath} ubuntu@144.22.213.47 "cd /home/ubuntu/dev/payldr && sudo npm install"`;
 const pm2RestartCommand = `ssh -i ${keyPath} ubuntu@144.22.213.47 "sudo pm2 restart all"`;
 
-console.log(`Iniciando transferência dos arquivos (payldr.js, package.json, cadastro.html) via SCP...`);
+console.log(`Iniciando transferência dos arquivos (payldr.js, package.json, cadastro.html, db.js) via SCP...`);
 console.log(`Executando: ${scpCommand}\n`);
 
 exec(scpCommand, (scpError, scpStdout, scpStderr) => {

@@ -2,10 +2,11 @@ import dotenv from "dotenv"
 import cors from "cors"
 import express from "express"
 import fetch from "cross-fetch"
-import Database from "better-sqlite3"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
+import bcrypt from "bcryptjs"
+import dbPool from "./db.js"
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,35 +15,135 @@ dotenv.config({ path: 'payldr.env' })
 let PORT = process.env.API_PORT || 9610;
 let ENVIRONMENT = (process.env.ENVIRONMENT || 'LOCAL').toUpperCase();
 
-const db = new Database('payldr.db');
+// Helper to format dates to MySQL DATETIME format (YYYY-MM-DD HH:MM:SS)
+function formatMySQLDate(dateInput) {
+    if (!dateInput) return null;
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return null;
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+}
 
-// Inicializa a tabela de conexões se não existir
-db.prepare(`
-    CREATE TABLE IF NOT EXISTS conexoes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tipo TEXT,
-        client_id TEXT,
-        evento TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-`).run();
+// Inicialização Assíncrona do Banco de Dados
+async function initDatabase() {
+    // Inicializa a tabela de conexões se não existir
+    dbPool.exec(`
+        CREATE TABLE IF NOT EXISTS conexoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo TEXT,
+            client_id TEXT,
+            evento TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 
-// Inicializa a tabela de jogos se não existir
-db.prepare(`
-    CREATE TABLE IF NOT EXISTS jogos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        url TEXT NOT NULL,
-        imagem TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-`).run();
+    // Inicializa a tabela de jogos se não existir
+    dbPool.exec(`
+        CREATE TABLE IF NOT EXISTS jogos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            url TEXT NOT NULL,
+            imagem TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Inicializa a tabela de usuários se não existir
+    dbPool.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NULL,
+            email TEXT NULL UNIQUE,
+            username TEXT NULL UNIQUE,
+            password TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
+            type TEXT DEFAULT 'guest',
+            hostId TEXT NULL,
+            canHost DATETIME NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Migrações para garantir que colunas novas existam caso a tabela tenha sido criada na estrutura antiga
+    const columns = dbPool.pragma('table_info(users)');
+    const colNames = columns.map(c => c.name);
+
+    if (!colNames.includes('username')) {
+        try { dbPool.exec("ALTER TABLE users ADD COLUMN username TEXT UNIQUE NULL"); } catch (e) {}
+    }
+    if (!colNames.includes('type')) {
+        try { dbPool.exec("ALTER TABLE users ADD COLUMN type TEXT DEFAULT 'guest'"); } catch (e) {}
+    }
+    if (!colNames.includes('hostId')) {
+        try { dbPool.exec("ALTER TABLE users ADD COLUMN hostId TEXT"); } catch (e) {}
+    }
+    if (!colNames.includes('canHost')) {
+        try { dbPool.exec("ALTER TABLE users ADD COLUMN canHost DATETIME"); } catch (e) {}
+    }
+
+    // Seed de usuários padrão se a tabela estiver vazia
+    const userCount = dbPool.prepare('SELECT COUNT(*) as count FROM users').get().count;
+    if (userCount === 0) {
+        const defaultHostPass = bcrypt.hashSync('payldr123', 10);
+        const defaultGuestPass = bcrypt.hashSync('payldr123', 10);
+        const testUserPass = bcrypt.hashSync('MySecurePassword123!', 10);
+        
+        const futureDate = new Date();
+        futureDate.setFullYear(futureDate.getFullYear() + 1);
+        const futureDateString = futureDate.toISOString();
+
+        dbPool.prepare('INSERT INTO users (username, password, type, hostId, canHost) VALUES (?, ?, ?, ?, ?)').run(
+            'host1', defaultHostPass, 'host', 'easynet-room-8827', futureDateString
+        );
+        dbPool.prepare('INSERT INTO users (username, password, type, hostId, canHost) VALUES (?, ?, ?, ?, ?)').run(
+            'guest1', defaultGuestPass, 'guest', '', null
+        );
+        dbPool.prepare('INSERT INTO users (name, email, password, type, hostId, canHost) VALUES (?, ?, ?, ?, ?, ?)').run(
+            'Test User', 'test_user_1783297086780@example.com', testUserPass, 'host', 'test-host-id', futureDateString
+        );
+        console.log('Usuários padrão semeados com sucesso no SQLite (host1 / guest1 / Test User).');
+    }
+
+    // Seed de jogos padrão se a tabela de jogos estiver vazia
+    const gameCount = dbPool.prepare('SELECT COUNT(*) as count FROM jogos').get().count;
+    if (gameCount === 0) {
+        dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(
+            'Ikemen GO', 'https://github.com/ikemen-go/ikemen-go/releases/download/v0.98.2/Ikemen_GO-v0.98.2-win64.zip', 'ikemen_base'
+        );
+        dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(
+            'Street Fighter', 'https://devserver.marketpix.com.br:9710/payldr/static/street_fighter.zip', 'street_fighter'
+        );
+        console.log('Jogos padrão semeados com sucesso no SQLite.');
+    }
+}
 
 
 let server = null;
 let app = express();
 app.use(cors());
 app.use(express.json({ extended: true }));
+
+const authMiddleware = (req, res, next) => {
+    const authUser = process.env.ADMIN_USER || 'admin';
+    const authPass = process.env.ADMIN_PASS || 'payldr123';
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="PayldrGames Admin"');
+        return res.status(401).send('Acesso não autorizado.');
+    }
+
+    const auth = Buffer.from(authHeader.split(' ')[1], 'base64').toString().split(':');
+    const user = auth[0];
+    const pass = auth[1];
+
+    if (user === authUser && pass === authPass) {
+        return next();
+    } else {
+        res.setHeader('WWW-Authenticate', 'Basic realm="PayldrGames Admin"');
+        return res.status(401).send('Credenciais inválidas.');
+    }
+};
 
 const generateId = (len = 10) => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -52,15 +153,16 @@ const generateId = (len = 10) => {
 const hosters = {};
 const seeders = {};
 const pendingRequests = {};
+const tempPrivateHosts = new Set();
 
 setInterval(() => {
     for (const hostId in hosters) {
         try {
-            hosters[hostId].write(': ping\n\n');
+            hosters[hostId].res.write(': ping\n\n');
         } catch (e) {
             delete hosters[hostId];
             try {
-                db.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'desconectou_ping')").run(hostId);
+                dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'desconectou_ping')").run(hostId);
             } catch (err) {}
         }
     }
@@ -70,7 +172,7 @@ setInterval(() => {
         } catch (e) {
             delete seeders[seederId];
             try {
-                db.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('seeder', ?, 'desconectou_ping')").run(seederId);
+                dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('seeder', ?, 'desconectou_ping')").run(seederId);
             } catch (err) {}
         }
     }
@@ -82,8 +184,12 @@ app.get("/status", async function (req, res) {
     return res.json({ service: "api", status: "on", time: Date.now() })
 })
 
-app.get('/payldr/hoster/:hostId', (req, res) => {
+app.get('/payldr/hoster/:hostId', async (req, res) => {
     const { hostId } = req.params;
+    const isPrivate = tempPrivateHosts.has(hostId) || hostId.startsWith('private-') || req.query.private === 'true';
+    if (tempPrivateHosts.has(hostId)) {
+        tempPrivateHosts.delete(hostId);
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -91,29 +197,29 @@ app.get('/payldr/hoster/:hostId', (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    hosters[hostId] = res;
-    console.log(`Hoster ligado: ${hostId}`);
+    hosters[hostId] = { res, private: isPrivate };
+    console.log(`Hoster ligado: ${hostId} (privado: ${isPrivate})`);
     try {
-        db.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'conectou')").run(hostId);
+        dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'conectou')").run(hostId);
     } catch (err) {
         console.error("Erro ao gravar conexao hoster no SQLite:", err.message);
     }
 
     res.write(`data: ${JSON.stringify({ tipo: 'SISTEMA', mensagem: `Ligado como ${hostId}` })}\n\n`);
 
-    req.on('close', () => {
+    req.on('close', async () => {
         console.log(`Hoster desligado: ${hostId}`);
         delete hosters[hostId];
         try {
-            db.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'desconectou')").run(hostId);
+            dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'desconectou')").run(hostId);
         } catch (err) {
             console.error("Erro ao gravar desconexao hoster no SQLite:", err.message);
         }
     });
 });
 
-app.get('/payldr/seeder/:seederId', (req, res) => {
-    const { seederId } = req.params;
+app.get('/payldr/seeder', async (req, res) => {
+    const seederId = "seeder-" + generateId(8);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -122,20 +228,20 @@ app.get('/payldr/seeder/:seederId', (req, res) => {
     res.flushHeaders();
 
     seeders[seederId] = res;
-    console.log(`Seeder ligado: ${seederId}`);
+    console.log(`Seeder ligado (auto-gerado): ${seederId}`);
     try {
-        db.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('seeder', ?, 'conectou')").run(seederId);
+        dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('seeder', ?, 'conectou')").run(seederId);
     } catch (err) {
         console.error("Erro ao gravar conexao seeder no SQLite:", err.message);
     }
 
-    res.write(`data: ${JSON.stringify({ tipo: 'SISTEMA', mensagem: `Ligado como ${seederId}` })}\n\n`);
+    res.write(`data: ${JSON.stringify({ tipo: 'ID_ATRIBUITO', seederId: seederId, mensagem: `Ligado como ${seederId}` })}\n\n`);
 
-    req.on('close', () => {
+    req.on('close', async () => {
         console.log(`Seeder desligado: ${seederId}`);
         delete seeders[seederId];
         try {
-            db.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('seeder', ?, 'desconectou')").run(seederId);
+            dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('seeder', ?, 'desconectou')").run(seederId);
         } catch (err) {
             console.error("Erro ao gravar desconexao seeder no SQLite:", err.message);
         }
@@ -147,7 +253,28 @@ app.get('/payldr/seeders', (req, res) => {
 });
 
 app.get('/payldr/hosters', (req, res) => {
-    return res.json(Object.keys(hosters));
+    const publicHosters = Object.keys(hosters).filter(id => !hosters[id].private);
+    return res.json(publicHosters);
+});
+
+app.post('/payldr/host/private/:hostId', (req, res) => {
+    const { hostId } = req.params;
+    tempPrivateHosts.add(hostId);
+    console.log(`Host marcado como privado temporariamente: ${hostId}`);
+    return res.json({ sucesso: true });
+});
+
+app.get('/payldr/generate-id', (req, res) => {
+    const letters = 'abcdefghijklmnopqrstuvwxyz';
+    const digits = '0123456789';
+    let newId;
+    do {
+        const part1 = Array.from({ length: 3 }, () => letters[Math.floor(Math.random() * letters.length)]).join('');
+        const part2 = Array.from({ length: 4 }, () => digits[Math.floor(Math.random() * digits.length)]).join('');
+        const part3 = Array.from({ length: 5 }, () => digits[Math.floor(Math.random() * digits.length)]).join('');
+        newId = `${part1}-${part2}-${part3}`;
+    } while (hosters[newId] || seeders[newId]);
+    return res.json({ id: newId });
 });
 
 app.post('/payldr/guest/send', (req, res) => {
@@ -159,11 +286,13 @@ app.post('/payldr/guest/send', (req, res) => {
         return res.status(200).json({ sucesso: false, mensagem: 'Campos incompletos.' });
     }
 
-    const targetRes = hosters[hostId] || seeders[hostId];
-    if (!targetRes) {
+    const targetObj = hosters[hostId] || seeders[hostId];
+    if (!targetObj) {
         console.log(`[Server] /guest/send falhou: hoster/seeder ${hostId} offline`);
         return res.status(200).json({ sucesso: false, mensagem: 'Hoster/Seeder offline ou não encontrado.' });
     }
+
+    const targetRes = targetObj.res || targetObj;
 
     const requestId = generateId(10);
     console.log(`[Server] Gerado requestId: ${requestId} para a requisição`);
@@ -225,7 +354,87 @@ app.post('/payldr/reply', (req, res) => {
     res.status(200).json({ sucesso: true, mensagem: 'Entregue.' });
 });
 
-app.get('/payldr/games/register', (req, res) => {
+app.post('/payldr/login', async (req, res) => {
+    const { username, password } = req.body;
+    console.log(`[Auth] Login attempt for user: ${username}`);
+
+    if (!username || !password) {
+        return res.status(400).json({ success: false, mensagem: 'Usuário e senha são obrigatórios.' });
+    }
+
+    try {
+        const user = dbPool.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(username, username);
+        if (!user) {
+            return res.status(401).json({ success: false, mensagem: 'Credenciais inválidas.' });
+        }
+
+        const match = bcrypt.compareSync(password, user.password);
+        if (!match) {
+            return res.status(401).json({ success: false, mensagem: 'Credenciais inválidas.' });
+        }
+
+        // Determina se o usuário pode ser host baseado na data canHost (se está no futuro ou igual a hoje)
+        let finalType = 'guest';
+        if (user.canHost) {
+            const canHostDate = new Date(user.canHost);
+            if (canHostDate >= new Date()) {
+                finalType = 'host';
+            }
+        }
+
+        console.log(`[Auth] Login successful: ${username} (canHost expires: ${user.canHost}, returning type: ${finalType})`);
+        return res.status(200).json({
+            success: true,
+            profile: {
+                username: user.username,
+                type: finalType,
+                hostId: user.hostId || ''
+            }
+        });
+    } catch (err) {
+        console.error('[Auth] Error logging in:', err.message);
+        return res.status(500).json({ success: false, mensagem: 'Erro interno ao realizar login.' });
+    }
+});
+
+app.post('/payldr/register', async (req, res) => {
+    const { username, email, password } = req.body;
+    console.log(`[Auth] Registration request for user: ${username} (email: ${email})`);
+
+    if (!username || !password || !email) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Usuário, e-mail e senha são obrigatórios.' });
+    }
+
+    try {
+        const existing = dbPool.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email);
+        if (existing) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Nome de usuário ou e-mail já cadastrado.' });
+        }
+
+        const hashedPassword = bcrypt.hashSync(password, 10);
+        const userType = 'guest';
+        const userHostId = '';
+        // Set canHost to null by default (inactive until activated later)
+        const userCanHost = null;
+
+        dbPool.prepare('INSERT INTO users (username, email, password, type, hostId, canHost) VALUES (?, ?, ?, ?, ?, ?)').run(
+            username,
+            email,
+            hashedPassword,
+            userType,
+            userHostId,
+            userCanHost
+        );
+
+        console.log(`[Auth] User registered successfully: ${username}`);
+        return res.status(201).json({ sucesso: true, mensagem: 'Usuário registrado com sucesso.' });
+    } catch (err) {
+        console.error('[Auth] Error registering user:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao registrar usuário.' });
+    }
+});
+
+app.get('/payldr/games/register', authMiddleware, (req, res) => {
     res.setHeader('Content-Type', 'text/html');
     try {
         const htmlPath = path.join(__dirname, 'cadastro.html');
@@ -237,10 +446,25 @@ app.get('/payldr/games/register', (req, res) => {
     }
 });
 
-// APIs REST para Gerenciamento de Jogos
-app.get('/payldr/api/games', (req, res) => {
+app.post('/payldr/jogos/cadastro', async (req, res) => {
+    const { nome, url, imagem } = req.body;
+    if (!nome || !url || !imagem) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Preencha todos os campos.' });
+    }
+
     try {
-        const rows = db.prepare('SELECT * FROM jogos ORDER BY created_at DESC').all();
+        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(nome, url, imagem);
+        return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
+    } catch (err) {
+        console.error('Erro ao cadastrar jogo no SQLite:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao salvar no banco.' });
+    }
+});
+
+// APIs REST para Gerenciamento de Jogos
+app.get('/payldr/api/games', async (req, res) => {
+    try {
+        const rows = dbPool.prepare('SELECT * FROM jogos ORDER BY created_at DESC').all();
         return res.status(200).json(rows);
     } catch (err) {
         console.error('Erro ao listar jogos do SQLite:', err.message);
@@ -248,15 +472,14 @@ app.get('/payldr/api/games', (req, res) => {
     }
 });
 
-app.post('/payldr/api/games', (req, res) => {
+app.post('/payldr/api/games', async (req, res) => {
     const { nome, url, imagem } = req.body;
     if (!nome || !url) {
         return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL são obrigatórios.' });
     }
 
     try {
-        const stmt = db.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)');
-        const info = stmt.run(nome, url, imagem || '');
+        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(nome, url, imagem || '');
         return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
     } catch (err) {
         console.error('Erro ao cadastrar jogo no SQLite:', err.message);
@@ -264,7 +487,7 @@ app.post('/payldr/api/games', (req, res) => {
     }
 });
 
-app.put('/payldr/api/games/:id', (req, res) => {
+app.put('/payldr/api/games/:id', async (req, res) => {
     const { id } = req.params;
     const { nome, url, imagem } = req.body;
     if (!nome || !url) {
@@ -272,8 +495,7 @@ app.put('/payldr/api/games/:id', (req, res) => {
     }
 
     try {
-        const stmt = db.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ? WHERE id = ?');
-        const info = stmt.run(nome, url, imagem || '', id);
+        const info = dbPool.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ? WHERE id = ?').run(nome, url, imagem || '', id);
         
         if (info.changes === 0) {
             return res.status(404).json({ sucesso: false, mensagem: 'Jogo não encontrado.' });
@@ -285,11 +507,10 @@ app.put('/payldr/api/games/:id', (req, res) => {
     }
 });
 
-app.delete('/payldr/api/games/:id', (req, res) => {
+app.delete('/payldr/api/games/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        const stmt = db.prepare('DELETE FROM jogos WHERE id = ?');
-        const info = stmt.run(id);
+        const info = dbPool.prepare('DELETE FROM jogos WHERE id = ?').run(id);
         
         if (info.changes === 0) {
             return res.status(404).json({ sucesso: false, mensagem: 'Jogo não encontrado.' });
@@ -318,6 +539,10 @@ async function getCerts() {
 async function startAsync() {
     console.log("startAsync");
     try {
+        // Inicializa tabelas no MySQL antes do servidor começar a escutar
+        await initDatabase();
+        console.log("Banco de dados MySQL inicializado.");
+
         switch (ENVIRONMENT) {
             case "LOCAL":
             case "DEVON":
