@@ -340,13 +340,21 @@
                         <input type="url" id="url" name="url" placeholder="Ex: https://..." required>
                     </div>
 
-                    <div class="form-group full-width">
+                    <div class="form-group">
                         <label for="imagem">URL da Imagem (Opcional)</label>
                         <input type="url" id="imagem" name="imagem" placeholder="Ex: https://.../capa.jpg">
                     </div>
+
+                    <div class="form-group" style="justify-content: center;">
+                        <label style="margin-bottom: 8px;">Status do Jogo</label>
+                        <div style="display: flex; align-items: center; gap: 10px; margin-top: 5px;">
+                            <input type="checkbox" id="status" name="status" checked style="width: auto; cursor: pointer; transform: scale(1.2);">
+                            <span style="font-size: 0.95rem; color: #e2e8f0; user-select: none;">Habilitado (Visível no Launcher)</span>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="button-group">
+                <div class="button-group" style="margin-top: 25px;">
                     <button type="submit" id="submitBtn">Cadastrar Jogo</button>
                     <button type="button" id="cancelBtn" class="cancel-btn" style="display: none;">Cancelar</button>
                 </div>
@@ -385,7 +393,7 @@
 
         async function loadGames() {
             try {
-                const res = await fetch('/payldr/api/games');
+                const res = await fetch('/payldr/api/games?all=true');
                 const games = await res.json();
                 
                 gamesGrid.innerHTML = '';
@@ -397,6 +405,9 @@
                 games.forEach(game => {
                     const card = document.createElement('div');
                     card.className = 'game-card';
+                    if (game.status === 'inactive') {
+                        card.style.opacity = '0.6';
+                    }
                     
                     let imageEl = '';
                     if (game.imagem && game.imagem.trim() !== '') {
@@ -405,13 +416,20 @@
                         imageEl = '<div class="game-img">🎮</div>';
                     }
 
+                    const badgeHtml = game.status === 'inactive' 
+                        ? `<span style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; width: fit-content;">Desabilitado</span>`
+                        : `<span style="background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; width: fit-content;">Habilitado</span>`;
+
                     card.innerHTML = `
                         ${imageEl}
                         <div class="game-info">
-                            <div class="game-name">${game.nome}</div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                                <div class="game-name">${game.nome}</div>
+                                ${badgeHtml}
+                            </div>
                             <a class="game-url" href="${game.url}" target="_blank">${game.url}</a>
                             <div class="game-actions">
-                                <div class="action-btn edit-btn" onclick="startEdit(${game.id}, '${encodeURIComponent(game.nome)}', '${encodeURIComponent(game.url)}', '${encodeURIComponent(game.imagem || '')}')">Editar</div>
+                                <div class="action-btn edit-btn" onclick="startEdit(${game.id}, '${encodeURIComponent(game.nome)}', '${encodeURIComponent(game.url)}', '${encodeURIComponent(game.imagem || '')}', '${game.status || 'active'}')">Editar</div>
                                 <div class="action-btn delete-btn" onclick="deleteGame(${game.id})">Deletar</div>
                             </div>
                         </div>
@@ -431,7 +449,8 @@
             const payload = {
                 nome: document.getElementById('nome').value,
                 url: document.getElementById('url').value,
-                imagem: document.getElementById('imagem').value
+                imagem: document.getElementById('imagem').value,
+                status: document.getElementById('status').checked ? 'active' : 'inactive'
             };
 
             const id = gameIdInput.value;
@@ -461,12 +480,13 @@
             }
         });
 
-        function startEdit(id, nome, url, imagem) {
+        function startEdit(id, nome, url, imagem, status) {
             isEditing = true;
             gameIdInput.value = id;
             document.getElementById('nome').value = decodeURIComponent(nome);
             document.getElementById('url').value = decodeURIComponent(url);
             document.getElementById('imagem').value = decodeURIComponent(imagem);
+            document.getElementById('status').checked = (status === 'active');
             
             formTitle.innerText = 'Editar Jogo';
             submitBtn.innerText = 'Salvar Alterações';
@@ -479,6 +499,7 @@
             isEditing = false;
             form.reset();
             gameIdInput.value = '';
+            document.getElementById('status').checked = true;
             formTitle.innerText = 'Adicionar Novo Jogo';
             submitBtn.innerText = 'Cadastrar Jogo';
             cancelBtn.style.display = 'none';

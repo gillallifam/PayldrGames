@@ -43,6 +43,7 @@ async function initDatabase() {
             nome TEXT NOT NULL,
             url TEXT NOT NULL,
             imagem TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     `);
@@ -81,6 +82,13 @@ async function initDatabase() {
         try { dbPool.exec("ALTER TABLE users ADD COLUMN canHost DATETIME"); } catch (e) {}
     }
 
+    // Migração para a tabela de jogos (adicionar coluna status)
+    const gameColumns = dbPool.pragma('table_info(jogos)');
+    const gameColNames = gameColumns.map(c => c.name);
+    if (!gameColNames.includes('status')) {
+        try { dbPool.exec("ALTER TABLE jogos ADD COLUMN status TEXT DEFAULT 'active'"); } catch (e) {}
+    }
+
     // Seed de usuários padrão se a tabela estiver vazia
     const userCount = dbPool.prepare('SELECT COUNT(*) as count FROM users').get().count;
     if (userCount === 0) {
@@ -107,11 +115,11 @@ async function initDatabase() {
     // Seed de jogos padrão se a tabela de jogos estiver vazia
     const gameCount = dbPool.prepare('SELECT COUNT(*) as count FROM jogos').get().count;
     if (gameCount === 0) {
-        dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(
-            'Ikemen GO', 'https://github.com/ikemen-go/ikemen-go/releases/download/v0.98.2/Ikemen_GO-v0.98.2-win64.zip', 'ikemen_base'
+        dbPool.prepare('INSERT INTO jogos (nome, url, imagem, status) VALUES (?, ?, ?, ?)').run(
+            'Ikemen GO', 'https://github.com/ikemen-go/ikemen-go/releases/download/v0.98.2/Ikemen_GO-v0.98.2-win64.zip', 'ikemen_base', 'active'
         );
-        dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(
-            'Street Fighter', 'https://devserver.marketpix.com.br:9710/payldr/static/street_fighter.zip', 'street_fighter'
+        dbPool.prepare('INSERT INTO jogos (nome, url, imagem, status) VALUES (?, ?, ?, ?)').run(
+            'Street Fighter', 'https://devserver.marketpix.com.br:9710/payldr/static/street_fighter.zip', 'street_fighter', 'active'
         );
         console.log('Jogos padrão semeados com sucesso no SQLite.');
     }
@@ -184,11 +192,9 @@ app.get("/status", async function (req, res) {
     return res.json({ service: "api", status: "on", time: Date.now() })
 })
 
-app.get('/payldr/hoster/:hostId', async (req, res) => {
-    const { hostId } = req.params;
-    const isPrivate = tempPrivateHosts.has(hostId) || hostId.startsWith('private-') || req.query.private === 'true';
-    if (tempPrivateHosts.has(hostId)) {
-        tempPrivateHosts.delete(hostId);
+function handleHosterConnection(hostId, isPrivate, req, res) {
+    if (isPrivate) {
+        tempPrivateHosts.add(hostId);
     }
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -216,6 +222,16 @@ app.get('/payldr/hoster/:hostId', async (req, res) => {
             console.error("Erro ao gravar desconexao hoster no SQLite:", err.message);
         }
     });
+}
+
+app.get('/payldr/hoster/private/:hostId', async (req, res) => {
+    const { hostId } = req.params;
+    handleHosterConnection(hostId, true, req, res);
+});
+
+app.get('/payldr/hoster/:hostId', async (req, res) => {
+    const { hostId } = req.params;
+    handleHosterConnection(hostId, false, req, res);
 });
 
 app.get('/payldr/seeder', async (req, res) => {
@@ -464,7 +480,13 @@ app.post('/payldr/jogos/cadastro', async (req, res) => {
 // APIs REST para Gerenciamento de Jogos
 app.get('/payldr/api/games', async (req, res) => {
     try {
-        const rows = dbPool.prepare('SELECT * FROM jogos ORDER BY created_at DESC').all();
+        const includeAll = req.query.all === 'true';
+        let query = 'SELECT * FROM jogos';
+        if (!includeAll) {
+            query += " WHERE status = 'active'";
+        }
+        query += ' ORDER BY created_at DESC';
+        const rows = dbPool.prepare(query).all();
         return res.status(200).json(rows);
     } catch (err) {
         console.error('Erro ao listar jogos do SQLite:', err.message);
@@ -473,13 +495,13 @@ app.get('/payldr/api/games', async (req, res) => {
 });
 
 app.post('/payldr/api/games', async (req, res) => {
-    const { nome, url, imagem } = req.body;
+    const { nome, url, imagem, status } = req.body;
     if (!nome || !url) {
         return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL são obrigatórios.' });
     }
 
     try {
-        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(nome, url, imagem || '');
+        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem, status) VALUES (?, ?, ?, ?)').run(nome, url, imagem || '', status || 'active');
         return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
     } catch (err) {
         console.error('Erro ao cadastrar jogo no SQLite:', err.message);
@@ -489,13 +511,13 @@ app.post('/payldr/api/games', async (req, res) => {
 
 app.put('/payldr/api/games/:id', async (req, res) => {
     const { id } = req.params;
-    const { nome, url, imagem } = req.body;
+    const { nome, url, imagem, status } = req.body;
     if (!nome || !url) {
         return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL são obrigatórios.' });
     }
 
     try {
-        const info = dbPool.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ? WHERE id = ?').run(nome, url, imagem || '', id);
+        const info = dbPool.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ?, status = ? WHERE id = ?').run(nome, url, imagem || '', status || 'active', id);
         
         if (info.changes === 0) {
             return res.status(404).json({ sucesso: false, mensagem: 'Jogo não encontrado.' });
