@@ -66,6 +66,34 @@
 
         .header-section {
             text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .nav-link {
+            color: #a78bfa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 6px 16px;
+            border-radius: 20px;
+            background: rgba(167, 139, 250, 0.08);
+            border: 1px solid rgba(167, 139, 250, 0.15);
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background: rgba(167, 139, 250, 0.2);
+            color: #f3f0ff;
+            transform: translateY(-1px);
         }
 
         h1 {
@@ -322,6 +350,9 @@
         <div class="header-section">
             <h1>PayldrGames</h1>
             <p class="subtitle">Gerencie os pacotes de jogos disponíveis no servidor</p>
+            <div class="nav-links">
+                <a href="/payldr/users" class="nav-link">Gerenciar Usuários</a>
+            </div>
         </div>
 
         <!-- Formulário de Cadastro / Edição -->
@@ -341,6 +372,11 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="zipFile">Ou Enviar Arquivo ZIP</label>
+                        <input type="file" id="zipFile" name="zipFile" accept=".zip" style="padding: 10px;">
+                    </div>
+
+                    <div class="form-group">
                         <label for="imagem">URL da Imagem (Opcional)</label>
                         <input type="url" id="imagem" name="imagem" placeholder="Ex: https://.../capa.jpg">
                     </div>
@@ -351,6 +387,17 @@
                             <input type="checkbox" id="status" name="status" checked style="width: auto; cursor: pointer; transform: scale(1.2);">
                             <span style="font-size: 0.95rem; color: #e2e8f0; user-select: none;">Habilitado (Visível no Launcher)</span>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Barra de Progresso de Upload -->
+                <div id="progressContainer" style="display: none; margin-top: 20px; background: rgba(255, 255, 255, 0.03); border-radius: 12px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.08);">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #a78bfa; margin-bottom: 8px; font-weight: 600;">
+                        <span id="progressState">Enviando ZIP...</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div style="width: 100%; height: 8px; background: rgba(0, 0, 0, 0.3); border-radius: 4px; overflow: hidden;">
+                        <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #8b5cf6 0%, #3b82f6 100%); transition: width 0.1s ease;"></div>
                     </div>
                 </div>
 
@@ -380,8 +427,24 @@
         const gameIdInput = document.getElementById('gameId');
         const gamesGrid = document.getElementById('gamesGrid');
         const toast = document.getElementById('toast');
+        const zipFileInput = document.getElementById('zipFile');
+        const urlInput = document.getElementById('url');
 
         let isEditing = false;
+
+        // Toggle required and disabled state when ZIP is selected
+        zipFileInput.addEventListener('change', () => {
+            if (zipFileInput.files.length > 0) {
+                urlInput.required = false;
+                urlInput.placeholder = "O arquivo ZIP enviado será utilizado.";
+                urlInput.disabled = true;
+                urlInput.value = '';
+            } else {
+                urlInput.required = true;
+                urlInput.placeholder = "Ex: https://...";
+                urlInput.disabled = false;
+            }
+        });
 
         function showToast(message, type = 'success') {
             toast.innerText = message;
@@ -441,43 +504,89 @@
             }
         }
 
-        form.addEventListener('submit', async (e) => {
+        form.addEventListener('submit', (e) => {
             e.preventDefault();
             submitBtn.disabled = true;
             submitBtn.innerText = 'Enviando...';
 
-            const payload = {
-                nome: document.getElementById('nome').value,
-                url: document.getElementById('url').value,
-                imagem: document.getElementById('imagem').value,
-                status: document.getElementById('status').checked ? 'active' : 'inactive'
-            };
+            const formData = new FormData();
+            formData.append('nome', document.getElementById('nome').value);
+            formData.append('imagem', document.getElementById('imagem').value);
+            formData.append('status', document.getElementById('status').checked ? 'active' : 'inactive');
+            
+            if (!urlInput.disabled) {
+                formData.append('url', urlInput.value);
+            }
+            if (zipFileInput.files.length > 0) {
+                formData.append('zipFile', zipFileInput.files[0]);
+            }
 
             const id = gameIdInput.value;
             const url = isEditing ? `/payldr/api/games/${id}` : '/payldr/api/games';
             const method = isEditing ? 'PUT' : 'POST';
 
-            try {
-                const response = await fetch(url, {
-                    method: method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+            const xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
 
-                const result = await response.json();
-                if (response.ok && result.sucesso) {
-                    showToast(isEditing ? 'Jogo atualizado com sucesso!' : 'Jogo cadastrado com sucesso!', 'success');
-                    resetForm();
-                    loadGames();
-                } else {
-                    showToast(result.mensagem || 'Erro ao salvar jogo', 'error');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressPercent = document.getElementById('progressPercent');
+            const progressState = document.getElementById('progressState');
+
+            if (zipFileInput.files.length > 0) {
+                progressContainer.style.display = 'block';
+                progressBar.style.width = '0%';
+                progressPercent.innerText = '0%';
+                progressState.innerText = 'Enviando ZIP...';
+            }
+
+            xhr.upload.addEventListener('progress', (event) => {
+                if (event.lengthComputable) {
+                    const percentComplete = Math.round((event.loaded / event.total) * 100);
+                    progressBar.style.width = percentComplete + '%';
+                    progressPercent.innerText = percentComplete + '%';
+                    if (percentComplete === 100) {
+                        progressState.innerText = 'Processando no servidor...';
+                    }
                 }
-            } catch (err) {
-                showToast('Erro de rede ao conectar ao servidor', 'error');
-            } finally {
+            });
+
+            xhr.addEventListener('load', () => {
+                progressContainer.style.display = 'none';
                 submitBtn.disabled = false;
                 submitBtn.innerText = isEditing ? 'Salvar Alterações' : 'Cadastrar Jogo';
-            }
+
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const result = JSON.parse(xhr.responseText);
+                        if (result.sucesso) {
+                            showToast(isEditing ? 'Jogo atualizado com sucesso!' : 'Jogo cadastrado com sucesso!', 'success');
+                            resetForm();
+                            loadGames();
+                        } else {
+                            showToast(result.mensagem || 'Erro ao salvar jogo', 'error');
+                        }
+                    } catch (err) {
+                        showToast('Erro ao processar resposta do servidor', 'error');
+                    }
+                } else {
+                    try {
+                        const result = JSON.parse(xhr.responseText);
+                        showToast(result.mensagem || 'Erro ao salvar jogo', 'error');
+                    } catch (err) {
+                        showToast(`Erro do servidor (${xhr.status})`, 'error');
+                    }
+                }
+            });
+
+            xhr.addEventListener('error', () => {
+                progressContainer.style.display = 'none';
+                submitBtn.disabled = false;
+                submitBtn.innerText = isEditing ? 'Salvar Alterações' : 'Cadastrar Jogo';
+                showToast('Erro de rede ao conectar ao servidor', 'error');
+            });
+
+            xhr.send(formData);
         });
 
         function startEdit(id, nome, url, imagem, status) {
@@ -488,6 +597,12 @@
             document.getElementById('imagem').value = decodeURIComponent(imagem);
             document.getElementById('status').checked = (status === 'active');
             
+            // Reset ZIP field and enable URL during edit start
+            zipFileInput.value = '';
+            urlInput.required = true;
+            urlInput.placeholder = "Ex: https://...";
+            urlInput.disabled = false;
+
             formTitle.innerText = 'Editar Jogo';
             submitBtn.innerText = 'Salvar Alterações';
             cancelBtn.style.display = 'block';
@@ -500,6 +615,13 @@
             form.reset();
             gameIdInput.value = '';
             document.getElementById('status').checked = true;
+            
+            // Reset zip and url field states
+            zipFileInput.value = '';
+            urlInput.required = true;
+            urlInput.placeholder = "Ex: https://...";
+            urlInput.disabled = false;
+
             formTitle.innerText = 'Adicionar Novo Jogo';
             submitBtn.innerText = 'Cadastrar Jogo';
             cancelBtn.style.display = 'none';

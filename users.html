@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Usuários - PayldrGames</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background: radial-gradient(circle at 50% 50%, #171224 0%, #0a0810 100%);
+            color: #f3f0ff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            overflow-y: auto;
+        }
+
+        .blob {
+            position: fixed;
+            width: 400px;
+            height: 400px;
+            background: #8b5cf6;
+            filter: blur(180px);
+            opacity: 0.12;
+            border-radius: 50%;
+            z-index: 0;
+            pointer-events: none;
+        }
+        .blob-1 { top: -10%; left: -10%; background: #3b82f6; }
+        .blob-2 { bottom: -10%; right: -10%; }
+
+        .container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 1100px;
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.02);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .header-section {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .nav-link {
+            color: #a78bfa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 6px 16px;
+            border-radius: 20px;
+            background: rgba(167, 139, 250, 0.08);
+            border: 1px solid rgba(167, 139, 250, 0.15);
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background: rgba(167, 139, 250, 0.2);
+            color: #f3f0ff;
+            transform: translateY(-1px);
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #c084fc 0%, #60a5fa 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 0.95rem;
+            font-weight: 300;
+        }
+
+        /* Form styling */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 600px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+            .form-group.full-width {
+                grid-column: span 1;
+            }
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group.full-width {
+            grid-column: span 2;
+        }
+
+        label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+            color: #a78bfa;
+        }
+
+        input, select {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 14px 16px;
+            border-radius: 12px;
+            color: #fff;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        select option {
+            background: #171224;
+            color: #fff;
+        }
+
+        input:focus, select:focus {
+            border-color: #a78bfa;
+            box-shadow: 0 0 15px rgba(167, 139, 250, 0.2);
+            background: rgba(0, 0, 0, 0.35);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        button {
+            flex: 1;
+            background: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%);
+            border: none;
+            padding: 15px;
+            border-radius: 12px;
+            color: white;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.25);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(139, 92, 246, 0.4);
+            filter: brightness(1.1);
+        }
+
+        button.cancel-btn {
+            background: rgba(255, 255, 255, 0.08);
+            color: #e2e8f0;
+            box-shadow: none;
+        }
+
+        button.cancel-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: none;
+        }
+
+        /* User Table styling */
+        .list-section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #f3f0ff;
+            border-left: 4px solid #8b5cf6;
+            padding-left: 12px;
+        }
+
+        .table-container {
+            background: rgba(255, 255, 255, 0.02);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            max-height: 500px;
+            overflow-y: auto;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        thead {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: #171224;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        th {
+            padding: 18px 20px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #a78bfa;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        td {
+            padding: 16px 20px;
+            font-size: 0.92rem;
+            color: #e2e8f0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            vertical-align: middle;
+        }
+
+        tr {
+            transition: background-color 0.2s;
+        }
+
+        tr:hover {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        .user-row-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .avatar-placeholder {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #a78bfa 0%, #3b82f6 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: #fff;
+            font-size: 0.95rem;
+            flex-shrink: 0;
+        }
+
+        .user-info-text {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .user-username {
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .user-name {
+            font-size: 0.78rem;
+            color: #94a3b8;
+        }
+
+        .table-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .action-btn {
+            padding: 8px 14px;
+            font-size: 0.8rem;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .edit-btn {
+            background: rgba(167, 139, 250, 0.1);
+            color: #c084fc;
+            border: 1px solid rgba(167, 139, 250, 0.2);
+        }
+
+        .edit-btn:hover {
+            background: rgba(167, 139, 250, 0.2);
+        }
+
+        .delete-btn {
+            background: rgba(239, 68, 68, 0.1);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .delete-btn:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        /* Toast container */
+        .toast {
+            position: fixed;
+            bottom: -100px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 16px 28px;
+            border-radius: 12px;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+            z-index: 100;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .toast.show {
+            bottom: 30px;
+        }
+
+        .toast-success { background: #10b981; color: #fff; }
+        .toast-error { background: #ef4444; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+
+    <div class="container">
+        <div class="header-section">
+            <h1>PayldrGames</h1>
+            <p class="subtitle">Gerencie os usuários do sistema, altere permissões e status</p>
+            <div class="nav-links">
+                <a href="/payldr/games/register" class="nav-link">Gerenciar Jogos</a>
+            </div>
+        </div>
+
+        <!-- Formulário de Cadastro / Edição -->
+        <div class="card">
+            <h2 id="formTitle" style="font-size: 1.3rem; margin-bottom: 20px; color: #c084fc;">Adicionar Novo Usuário</h2>
+            <form id="userForm">
+                <input type="hidden" id="userId" name="id">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="username">Nome de Usuário (Username)</label>
+                        <input type="text" id="username" name="username" placeholder="Ex: host_marcos" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="name">Nome Completo</label>
+                        <input type="text" id="name" name="name" placeholder="Ex: Marcos Silva">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="email">E-mail</label>
+                        <input type="email" id="email" name="email" placeholder="Ex: marcos@email.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password" id="passwordLabel">Senha</label>
+                        <input type="password" id="password" name="password" placeholder="Digite uma senha segura..." required>
+                    </div>
+
+                     <div class="form-group">
+                        <label for="status">Status da Conta</label>
+                        <select id="status" name="status">
+                            <option value="active">Ativo / Habilitado</option>
+                            <option value="inactive">Inativo / Desabilitado</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="hostId">Host ID Fixo (Opcional)</label>
+                        <input type="text" id="hostId" name="hostId" placeholder="Ex: easynet-room-123">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="canHost">Pode Hostear Até (Data/Hora)</label>
+                        <input type="datetime-local" id="canHost" name="canHost">
+                    </div>
+                </div>
+
+                <div class="button-group" style="margin-top: 25px;">
+                    <button type="submit" id="submitBtn">Cadastrar Usuário</button>
+                    <button type="button" id="cancelBtn" class="cancel-btn" style="display: none;">Cancelar</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Lista de Usuários -->
+        <div>
+            <h2 class="list-section-title">Usuários Cadastrados</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Usuário</th>
+                            <th>E-mail</th>
+                            <th>Status Geral</th>
+                            <th>Host ID</th>
+                            <th>Pode Hostear Até</th>
+                            <th style="text-align: right;">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usersTableBody">
+                        <!-- Populado via Javascript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const form = document.getElementById('userForm');
+        const formTitle = document.getElementById('formTitle');
+        const submitBtn = document.getElementById('submitBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+        const userIdInput = document.getElementById('userId');
+        const passwordInput = document.getElementById('password');
+        const passwordLabel = document.getElementById('passwordLabel');
+        const usersTableBody = document.getElementById('usersTableBody');
+        const toast = document.getElementById('toast');
+
+        let isEditing = false;
+
+        function showToast(message, type = 'success') {
+            toast.innerText = message;
+            toast.className = 'toast show ' + (type === 'success' ? 'toast-success' : 'toast-error');
+            setTimeout(() => {
+                toast.className = 'toast';
+            }, 3000);
+        }
+
+        function formatDisplayDate(dateStr) {
+            if (!dateStr) return 'Não definido';
+            try {
+                const date = new Date(dateStr);
+                if (isNaN(date.getTime())) return 'Não definido';
+                return date.toLocaleString('pt-BR');
+            } catch(e) {
+                return 'Não definido';
+            }
+        }
+
+        function isHostActive(canHost) {
+            if (!canHost) return false;
+            try {
+                const date = new Date(canHost);
+                return date >= new Date();
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function loadUsers() {
+            try {
+                const res = await fetch('/payldr/api/users');
+                const users = await res.json();
+                
+                usersTableBody.innerHTML = '';
+                if (users.length === 0) {
+                    usersTableBody.innerHTML = '<tr><td colspan="7" class="empty-state">Nenhum usuário cadastrado até o momento.</td></tr>';
+                    return;
+                }
+
+                users.forEach(user => {
+                    const row = document.createElement('tr');
+                    if (user.status === 'inactive') {
+                        row.style.opacity = '0.6';
+                    }
+
+                    const initial = (user.username || user.name || '?').charAt(0).toUpperCase();
+
+                    const badgeTypeHtml = isHostActive(user.canHost)
+                        ? `<span style="background: rgba(139, 92, 246, 0.2); border: 1px solid rgba(139, 92, 246, 0.4); color: #c084fc; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600;">ATIVO</span>`
+                        : `<span style="background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); color: #94a3b8; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600;">INATIVO</span>`;
+
+                    const badgeStatusHtml = user.status === 'active'
+                        ? `<span style="background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600;">ATIVO</span>`
+                        : `<span style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600;">INATIVO</span>`;
+
+                    row.innerHTML = `
+                        <td>
+                            <div class="user-row-meta">
+                                <div class="avatar-placeholder">${initial}</div>
+                                <div class="user-info-text">
+                                    <span class="user-username">${user.username || 'Sem usuário'}</span>
+                                    <span class="user-name">${user.name || 'Sem nome'}</span>
+                                </div>
+                            </div>
+                        </td>
+                        <td>${user.email || 'Não informado'}</td>
+                        <td>${badgeStatusHtml}</td>
+                        <td style="font-family: monospace; font-size: 0.85rem;">${user.hostId || 'Nenhum'}</td>
+                        <td>${formatDisplayDate(user.canHost)}</td>
+                        <td>
+                            <div class="table-actions" style="justify-content: flex-end;">
+                                <div class="action-btn edit-btn" onclick="startEdit(${user.id}, '${encodeURIComponent(user.username || '')}', '${encodeURIComponent(user.name || '')}', '${encodeURIComponent(user.email || '')}', '${user.status}', '${encodeURIComponent(user.hostId || '')}', '${user.canHost || ''}')" title="Editar Usuário" style="padding: 8px 10px;">
+                                    <i class="fa-solid fa-pen"></i>
+                                </div>
+                                <div class="action-btn delete-btn" onclick="deleteUser(${user.id})" title="Deletar Usuário" style="padding: 8px 10px;">
+                                    <i class="fa-solid fa-trash"></i>
+                                </div>
+                            </div>
+                        </td>
+                    `;
+                    usersTableBody.appendChild(row);
+                });
+            } catch (err) {
+                showToast('Erro ao carregar lista de usuários', 'error');
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            submitBtn.disabled = true;
+            submitBtn.innerText = 'Enviando...';
+
+            // Converter datetime-local (YYYY-MM-DDTHH:MM) para ISO
+            let canHostVal = document.getElementById('canHost').value;
+            if (canHostVal) {
+                canHostVal = new Date(canHostVal).toISOString();
+            } else {
+                canHostVal = null;
+            }
+
+            const payload = {
+                username: document.getElementById('username').value,
+                name: document.getElementById('name').value,
+                email: document.getElementById('email').value,
+                status: document.getElementById('status').value,
+                hostId: document.getElementById('hostId').value,
+                canHost: canHostVal
+            };
+
+            const pwd = passwordInput.value;
+            if (pwd && pwd.trim() !== '') {
+                payload.password = pwd;
+            }
+
+            const id = userIdInput.value;
+            const url = isEditing ? `/payldr/api/users/${id}` : '/payldr/api/users';
+            const method = isEditing ? 'PUT' : 'POST';
+
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                if (response.ok && result.sucesso) {
+                    showToast(isEditing ? 'Usuário atualizado com sucesso!' : 'Usuário cadastrado com sucesso!', 'success');
+                    resetForm();
+                    loadGames();
+                } else {
+                    showToast(result.mensagem || 'Erro ao salvar usuário', 'error');
+                }
+            } catch (err) {
+                showToast('Erro de rede ao conectar ao servidor', 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = isEditing ? 'Salvar Alterações' : 'Cadastrar Usuário';
+            }
+        });
+
+        function startEdit(id, username, name, email, status, hostId, canHost) {
+            isEditing = true;
+            userIdInput.value = id;
+            document.getElementById('username').value = decodeURIComponent(username);
+            document.getElementById('name').value = decodeURIComponent(name);
+            document.getElementById('email').value = decodeURIComponent(email);
+            document.getElementById('status').value = status;
+            document.getElementById('hostId').value = decodeURIComponent(hostId);
+            
+            if (canHost && canHost !== 'null' && canHost !== 'undefined') {
+                // canHost pode ser formatado em datetime-local (YYYY-MM-DDTHH:MM)
+                try {
+                    const dateObj = new Date(canHost);
+                    const pad = num => String(num).padStart(2, '0');
+                    const localDateTime = `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}T${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}`;
+                    document.getElementById('canHost').value = localDateTime;
+                } catch(e) {
+                    document.getElementById('canHost').value = '';
+                }
+            } else {
+                document.getElementById('canHost').value = '';
+            }
+
+            passwordInput.required = false;
+            passwordLabel.innerText = 'Senha (Deixe em branco para manter)';
+            
+            formTitle.innerText = 'Editar Usuário';
+            submitBtn.innerText = 'Salvar Alterações';
+            cancelBtn.style.display = 'block';
+            
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function resetForm() {
+            isEditing = false;
+            form.reset();
+            userIdInput.value = '';
+            passwordInput.required = true;
+            passwordLabel.innerText = 'Senha';
+            formTitle.innerText = 'Adicionar Novo Usuário';
+            submitBtn.innerText = 'Cadastrar Usuário';
+            cancelBtn.style.display = 'none';
+        }
+
+        cancelBtn.addEventListener('click', resetForm);
+
+        async function deleteUser(id) {
+            if (!confirm('Deseja realmente deletar este usuário?')) return;
+            try {
+                const res = await fetch(`/payldr/api/users/${id}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (res.ok && result.sucesso) {
+                    showToast('Usuário deletado com sucesso!', 'success');
+                    loadUsers();
+                    if (isEditing && userIdInput.value == id) {
+                        resetForm();
+                    }
+                } else {
+                    showToast(result.mensagem || 'Erro ao deletar usuário', 'error');
+                }
+            } catch (err) {
+                showToast('Erro de rede ao conectar ao servidor', 'error');
+            }
+        }
+
+        // Renomeado loadGames no formulário submit
+        function loadGames() {
+            loadUsers();
+        }
+
+        // Carga inicial
+        loadUsers();
+    </script>
+</body>
+</html>

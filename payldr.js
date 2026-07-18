@@ -40,7 +40,7 @@ async function initDatabase() {
     dbPool.exec(`
         CREATE TABLE IF NOT EXISTS jogos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
+            nome TEXT NOT NULL UNIQUE,
             url TEXT NOT NULL,
             imagem TEXT NOT NULL,
             status TEXT DEFAULT 'active',
@@ -88,6 +88,9 @@ async function initDatabase() {
     if (!gameColNames.includes('status')) {
         try { dbPool.exec("ALTER TABLE jogos ADD COLUMN status TEXT DEFAULT 'active'"); } catch (e) {}
     }
+    try {
+        dbPool.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_jogos_nome ON jogos(nome)");
+    } catch (e) {}
 
     // Seed de usuários padrão se a tabela estiver vazia
     const userCount = dbPool.prepare('SELECT COUNT(*) as count FROM users').get().count;
@@ -130,6 +133,55 @@ let server = null;
 let app = express();
 app.use(cors());
 app.use(express.json({ extended: true }));
+
+// Servir arquivos estáticos do diretório /static
+const staticDir = path.join(__dirname, 'static');
+if (!fs.existsSync(staticDir)) {
+    fs.mkdirSync(staticDir, { recursive: true });
+}
+app.use('/payldr/static', express.static(staticDir));
+
+// Configuração do Multer para upload de arquivos zip
+import multer from 'multer';
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, staticDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, 'game-' + uniqueSuffix + ext);
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.toLowerCase().endsWith('.zip')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Apenas arquivos .zip são permitidos!'), false);
+        }
+    }
+});
+
+// Helper para deletar arquivos ZIP locais antigos de jogos
+function deleteGameZip(gameUrl) {
+    if (!gameUrl) return;
+    const match = gameUrl.match(/\/payldr\/static\/([^/?#]+)/);
+    if (match) {
+        const filename = match[1];
+        const filePath = path.join(staticDir, filename);
+        if (fs.existsSync(filePath)) {
+            try {
+                fs.unlinkSync(filePath);
+                console.log(`[File Cleanup] Deletado ZIP antigo: ${filePath}`);
+            } catch (err) {
+                console.error(`[File Cleanup] Erro ao deletar arquivo: ${err.message}`);
+            }
+        }
+    }
+}
 
 const authMiddleware = (req, res, next) => {
     const authUser = process.env.ADMIN_USER || 'admin';
@@ -203,8 +255,9 @@ function handleHosterConnection(hostId, isPrivate, req, res) {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    hosters[hostId] = { res, private: isPrivate };
-    console.log(`Hoster ligado: ${hostId} (privado: ${isPrivate})`);
+    const gameId = req.query.gameId || "";
+    hosters[hostId] = { res, private: isPrivate, gameId };
+    console.log(`Hoster ligado: ${hostId} (privado: ${isPrivate}) para o jogo: ${gameId}`);
     try {
         dbPool.prepare("INSERT INTO conexoes (tipo, client_id, evento) VALUES ('hoster', ?, 'conectou')").run(hostId);
     } catch (err) {
@@ -269,8 +322,22 @@ app.get('/payldr/seeders', (req, res) => {
 });
 
 app.get('/payldr/hosters', (req, res) => {
-    const publicHosters = Object.keys(hosters).filter(id => !hosters[id].private);
-    return res.json(publicHosters);
+    const result = {};
+    for (const id in hosters) {
+        if (!hosters[id].private) {
+            result[id] = hosters[id].gameId || "";
+        }
+    }
+    return res.json(result);
+});
+
+app.get('/payldr/hoster-game/:hostId', (req, res) => {
+    const { hostId } = req.params;
+    const host = hosters[hostId];
+    if (host) {
+        return res.json({ gameId: host.gameId || "" });
+    }
+    return res.json({ gameId: "" });
 });
 
 app.post('/payldr/host/private/:hostId', (req, res) => {
@@ -404,7 +471,8 @@ app.post('/payldr/login', async (req, res) => {
             profile: {
                 username: user.username,
                 type: finalType,
-                hostId: user.hostId || ''
+                hostId: user.hostId || '',
+                canHost: user.canHost || ''
             }
         });
     } catch (err) {
@@ -462,6 +530,18 @@ app.get('/payldr/games/register', authMiddleware, (req, res) => {
     }
 });
 
+app.get('/payldr/users', authMiddleware, (req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    try {
+        const htmlPath = path.join(__dirname, 'users.html');
+        const html = fs.readFileSync(htmlPath, 'utf8');
+        res.send(html);
+    } catch (err) {
+        console.error('Erro ao carregar users.html:', err.message);
+        res.status(500).send('Erro interno do servidor ao carregar a página.');
+    }
+});
+
 app.post('/payldr/jogos/cadastro', async (req, res) => {
     const { nome, url, imagem } = req.body;
     if (!nome || !url || !imagem) {
@@ -469,6 +549,11 @@ app.post('/payldr/jogos/cadastro', async (req, res) => {
     }
 
     try {
+        const existing = dbPool.prepare('SELECT id FROM jogos WHERE nome = ?').get(nome);
+        if (existing) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Já existe um jogo cadastrado com este nome.' });
+        }
+
         const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem) VALUES (?, ?, ?)').run(nome, url, imagem);
         return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
     } catch (err) {
@@ -494,34 +579,93 @@ app.get('/payldr/api/games', async (req, res) => {
     }
 });
 
-app.post('/payldr/api/games', async (req, res) => {
+app.post('/payldr/api/games', (req, res, next) => {
+    upload.single('zipFile')(req, res, function (err) {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({ sucesso: false, mensagem: `Erro de upload: ${err.message}` });
+        } else if (err) {
+            return res.status(400).json({ sucesso: false, mensagem: err.message });
+        }
+        next();
+    });
+}, async (req, res) => {
     const { nome, url, imagem, status } = req.body;
-    if (!nome || !url) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL são obrigatórios.' });
+    let gameUrl = url;
+    if (req.file) {
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        gameUrl = `${baseUrl}/payldr/static/${req.file.filename}`;
+    }
+
+    if (!nome || !gameUrl) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL/Arquivo ZIP são obrigatórios.' });
     }
 
     try {
-        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem, status) VALUES (?, ?, ?, ?)').run(nome, url, imagem || '', status || 'active');
+        const existing = dbPool.prepare('SELECT id FROM jogos WHERE nome = ?').get(nome);
+        if (existing) {
+            if (req.file) {
+                deleteGameZip(gameUrl);
+            }
+            return res.status(400).json({ sucesso: false, mensagem: 'Já existe um jogo cadastrado com este nome.' });
+        }
+
+        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem, status) VALUES (?, ?, ?, ?)').run(nome, gameUrl, imagem || '', status || 'active');
         return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
     } catch (err) {
         console.error('Erro ao cadastrar jogo no SQLite:', err.message);
+        if (req.file) {
+            deleteGameZip(gameUrl);
+        }
         return res.status(500).json({ sucesso: false, mensagem: 'Erro ao cadastrar jogo no banco.' });
     }
 });
 
-app.put('/payldr/api/games/:id', async (req, res) => {
+app.put('/payldr/api/games/:id', (req, res, next) => {
+    upload.single('zipFile')(req, res, function (err) {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({ sucesso: false, mensagem: `Erro de upload: ${err.message}` });
+        } else if (err) {
+            return res.status(400).json({ sucesso: false, mensagem: err.message });
+        }
+        next();
+    });
+}, async (req, res) => {
     const { id } = req.params;
     const { nome, url, imagem, status } = req.body;
-    if (!nome || !url) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL são obrigatórios.' });
-    }
 
     try {
-        const info = dbPool.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ?, status = ? WHERE id = ?').run(nome, url, imagem || '', status || 'active', id);
-        
-        if (info.changes === 0) {
+        const oldGame = dbPool.prepare('SELECT url FROM jogos WHERE id = ?').get(id);
+        if (!oldGame) {
+            if (req.file) {
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                deleteGameZip(`${baseUrl}/payldr/static/${req.file.filename}`);
+            }
             return res.status(404).json({ sucesso: false, mensagem: 'Jogo não encontrado.' });
         }
+
+        let gameUrl = url;
+        if (req.file) {
+            const baseUrl = `${req.protocol}://${req.get('host')}`;
+            gameUrl = `${baseUrl}/payldr/static/${req.file.filename}`;
+            deleteGameZip(oldGame.url);
+        } else if (url && oldGame.url !== url) {
+            deleteGameZip(oldGame.url);
+        }
+
+        if (!nome || !gameUrl) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL/Arquivo ZIP são obrigatórios.' });
+        }
+
+        const existing = dbPool.prepare('SELECT id FROM jogos WHERE nome = ? AND id != ?').get(nome, id);
+        if (existing) {
+            if (req.file) {
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                deleteGameZip(`${baseUrl}/payldr/static/${req.file.filename}`);
+            }
+            return res.status(400).json({ sucesso: false, mensagem: 'Já existe outro jogo cadastrado com este nome.' });
+        }
+
+        const info = dbPool.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ?, status = ? WHERE id = ?').run(nome, gameUrl, imagem || '', status || 'active', id);
         return res.status(200).json({ sucesso: true });
     } catch (err) {
         console.error('Erro ao atualizar jogo no SQLite:', err.message);
@@ -532,8 +676,14 @@ app.put('/payldr/api/games/:id', async (req, res) => {
 app.delete('/payldr/api/games/:id', async (req, res) => {
     const { id } = req.params;
     try {
+        const game = dbPool.prepare('SELECT url FROM jogos WHERE id = ?').get(id);
+        if (!game) {
+            return res.status(404).json({ sucesso: false, mensagem: 'Jogo não encontrado.' });
+        }
+
+        deleteGameZip(game.url);
+
         const info = dbPool.prepare('DELETE FROM jogos WHERE id = ?').run(id);
-        
         if (info.changes === 0) {
             return res.status(404).json({ sucesso: false, mensagem: 'Jogo não encontrado.' });
         }
@@ -541,6 +691,102 @@ app.delete('/payldr/api/games/:id', async (req, res) => {
     } catch (err) {
         console.error('Erro ao deletar jogo do SQLite:', err.message);
         return res.status(500).json({ sucesso: false, mensagem: 'Erro ao deletar jogo no banco.' });
+    }
+});
+
+// APIs REST para Gerenciamento de Usuários
+app.get('/payldr/api/users', async (req, res) => {
+    try {
+        const rows = dbPool.prepare('SELECT id, name, email, username, status, type, hostId, canHost, created_at, updated_at FROM users ORDER BY created_at DESC').all();
+        return res.status(200).json(rows);
+    } catch (err) {
+        console.error('Erro ao listar usuários do SQLite:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar usuários no banco.' });
+    }
+});
+
+app.post('/payldr/api/users', async (req, res) => {
+    const { username, name, email, password, status, hostId, canHost } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Username e senha são obrigatórios.' });
+    }
+
+    try {
+        // Verifica se usuário ou email já existem
+        const existing = dbPool.prepare("SELECT id FROM users WHERE username = ? OR (email = ? AND email IS NOT NULL AND email != '')").get(username, email || '');
+        if (existing) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Nome de usuário ou e-mail já cadastrado.' });
+        }
+
+        const hashedPassword = bcrypt.hashSync(password, 10);
+        const formattedCanHost = formatMySQLDate(canHost);
+
+        const info = dbPool.prepare(`
+            INSERT INTO users (username, name, email, password, type, status, hostId, canHost) 
+            VALUES (?, ?, ?, ?, 'guest', ?, ?, ?)
+        `).run(username, name || null, email || null, hashedPassword, status || 'active', hostId || null, formattedCanHost);
+
+        return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
+    } catch (err) {
+        console.error('Erro ao cadastrar usuário no SQLite:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro ao cadastrar usuário no banco.' });
+    }
+});
+
+app.put('/payldr/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    const { username, name, email, password, type, status, hostId, canHost } = req.body;
+    if (!username) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Username é obrigatório.' });
+    }
+
+    try {
+        // Verifica se username ou email choca com outro usuário
+        const existing = dbPool.prepare("SELECT id FROM users WHERE (username = ? OR (email = ? AND email IS NOT NULL AND email != '')) AND id != ?").get(username, email || '', id);
+        if (existing) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Nome de usuário ou e-mail já cadastrado em outra conta.' });
+        }
+
+        const formattedCanHost = formatMySQLDate(canHost);
+
+        let info;
+        if (password && password.trim() !== '') {
+            const hashedPassword = bcrypt.hashSync(password, 10);
+            info = dbPool.prepare(`
+                UPDATE users 
+                SET username = ?, name = ?, email = ?, password = ?, status = ?, hostId = ?, canHost = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            `).run(username, name || null, email || null, hashedPassword, status || 'active', hostId || null, formattedCanHost, id);
+        } else {
+            info = dbPool.prepare(`
+                UPDATE users 
+                SET username = ?, name = ?, email = ?, status = ?, hostId = ?, canHost = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            `).run(username, name || null, email || null, status || 'active', hostId || null, formattedCanHost, id);
+        }
+
+        if (info.changes === 0) {
+            return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado.' });
+        }
+        return res.status(200).json({ sucesso: true });
+    } catch (err) {
+        console.error('Erro ao atualizar usuário no SQLite:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro ao atualizar usuário no banco.' });
+    }
+});
+
+app.delete('/payldr/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const info = dbPool.prepare('DELETE FROM users WHERE id = ?').run(id);
+        
+        if (info.changes === 0) {
+            return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado.' });
+        }
+        return res.status(200).json({ sucesso: true });
+    } catch (err) {
+        console.error('Erro ao deletar usuário do SQLite:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro ao deletar usuário no banco.' });
     }
 });
 
