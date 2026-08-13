@@ -65,6 +65,56 @@ async function initDatabase() {
         )
     `);
 
+    // Inicializa a tabela de estatísticas/rankings por jogo se não existir
+    dbPool.exec(`
+        CREATE TABLE IF NOT EXISTS rankings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            elo_rating INTEGER DEFAULT 0,
+            wins INTEGER DEFAULT 0,
+            losses INTEGER DEFAULT 0,
+            favorite_character TEXT DEFAULT '',
+            tier TEXT DEFAULT 'Bronze',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, game_id)
+        )
+    `);
+
+    // Inicializa a tabela de histórico de partidas se não existir
+    dbPool.exec(`
+        CREATE TABLE IF NOT EXISTS match_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT NOT NULL,
+            host_username TEXT NOT NULL,
+            guest_username TEXT NOT NULL,
+            winner_username TEXT NOT NULL,
+            host_character TEXT DEFAULT '',
+            guest_character TEXT DEFAULT '',
+            host_score INTEGER DEFAULT 0,
+            guest_score INTEGER DEFAULT 0,
+            duration_seconds INTEGER DEFAULT 0,
+            elo_change INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Inicializa a tabela de estatísticas por personagem se não existir
+    dbPool.exec(`
+        CREATE TABLE IF NOT EXISTS character_rankings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            character_name TEXT NOT NULL,
+            elo_rating INTEGER DEFAULT 1200,
+            wins INTEGER DEFAULT 0,
+            losses INTEGER DEFAULT 0,
+            tier TEXT DEFAULT 'Bronze',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, game_id, character_name)
+        )
+    `);
+
     // Migrações para garantir que colunas novas existam caso a tabela tenha sido criada na estrutura antiga
     const columns = dbPool.pragma('table_info(users)');
     const colNames = columns.map(c => c.name);
@@ -790,7 +840,251 @@ app.delete('/payldr/api/users/:id', async (req, res) => {
     }
 });
 
+// Funções auxiliares para cálculo de ELO e Tiers
+function calculateElo(ratingA, ratingB, actualScoreA, kFactor = 32) {
+    const expectedScoreA = 1 / (1 + Math.pow(10, (ratingB - ratingA) / 400));
+    const newRatingA = Math.round(ratingA + kFactor * (actualScoreA - expectedScoreA));
+    return Math.max(0, newRatingA);
+}
+
+function getEloTier(elo) {
+    if (elo >= 1200) return 'Mestre';
+    if (elo >= 900) return 'Diamante';
+    if (elo >= 600) return 'Ouro';
+    if (elo >= 300) return 'Prata';
+    return 'Bronze';
+}
+
+// Endpoint para registrar o resultado de uma partida e atualizar o ELO/Ranking
+app.post('/payldr/match-result', async (req, res) => {
+    try {
+        const { gameId, hostUsername, guestUsername, winnerUsername, hostCharacter, guestCharacter, hostScore, guestScore, durationSeconds } = req.body;
+
+        if (!gameId || !hostUsername || !guestUsername || !winnerUsername) {
+            return res.status(400).json({ sucesso: false, mensagem: 'Parâmetros obrigatórios ausentes (gameId, hostUsername, guestUsername, winnerUsername).' });
+        }
+
+        // Busca ou cria registro de ranking do Host
+        let hostRank = dbPool.prepare('SELECT * FROM rankings WHERE username = ? AND game_id = ?').get(hostUsername, gameId);
+        if (!hostRank) {
+            dbPool.prepare("INSERT INTO rankings (username, game_id, elo_rating, wins, losses, favorite_character, tier) VALUES (?, ?, 0, 0, 0, ?, 'Bronze')").run(hostUsername, gameId, hostCharacter || '');
+            hostRank = dbPool.prepare('SELECT * FROM rankings WHERE username = ? AND game_id = ?').get(hostUsername, gameId);
+        }
+
+        // Busca ou cria registro de ranking do Guest
+        let guestRank = dbPool.prepare('SELECT * FROM rankings WHERE username = ? AND game_id = ?').get(guestUsername, gameId);
+        if (!guestRank) {
+            dbPool.prepare("INSERT INTO rankings (username, game_id, elo_rating, wins, losses, favorite_character, tier) VALUES (?, ?, 0, 0, 0, ?, 'Bronze')").run(guestUsername, gameId, guestCharacter || '');
+            guestRank = dbPool.prepare('SELECT * FROM rankings WHERE username = ? AND game_id = ?').get(guestUsername, gameId);
+        }
+
+        const isHostWinner = (winnerUsername.toLowerCase() === hostUsername.toLowerCase());
+        const actualHostScore = isHostWinner ? 1 : 0;
+        const actualGuestScore = isHostWinner ? 0 : 1;
+
+        const newHostElo = calculateElo(hostRank.elo_rating, guestRank.elo_rating, actualHostScore);
+        const newGuestElo = calculateElo(guestRank.elo_rating, hostRank.elo_rating, actualGuestScore);
+
+        const hostEloChange = newHostElo - hostRank.elo_rating;
+        const guestEloChange = newGuestElo - guestRank.elo_rating;
+
+        const newHostTier = getEloTier(newHostElo);
+        const newGuestTier = getEloTier(newGuestElo);
+
+        // Atualiza estatísticas do Host
+        dbPool.prepare(`
+            UPDATE rankings 
+            SET elo_rating = ?, 
+                wins = wins + ?, 
+                losses = losses + ?, 
+                favorite_character = CASE WHEN ? != '' THEN ? ELSE favorite_character END, 
+                tier = ?, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE username = ? AND game_id = ?
+        `).run(newHostElo, isHostWinner ? 1 : 0, isHostWinner ? 0 : 1, hostCharacter || '', hostCharacter || '', newHostTier, hostUsername, gameId);
+
+        // Atualiza estatísticas do Guest
+        dbPool.prepare(`
+            UPDATE rankings 
+            SET elo_rating = ?, 
+                wins = wins + ?, 
+                losses = losses + ?, 
+                favorite_character = CASE WHEN ? != '' THEN ? ELSE favorite_character END, 
+                tier = ?, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE username = ? AND game_id = ?
+        `).run(newGuestElo, isHostWinner ? 0 : 1, isHostWinner ? 1 : 0, guestCharacter || '', guestCharacter || '', newGuestTier, guestUsername, gameId);
+
+        // Registra a partida no histórico
+        dbPool.prepare(`
+            INSERT INTO match_history (game_id, host_username, guest_username, winner_username, host_character, guest_character, host_score, guest_score, duration_seconds, elo_change)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(gameId, hostUsername, guestUsername, winnerUsername, hostCharacter || '', guestCharacter || '', hostScore || 0, guestScore || 0, durationSeconds || 0, hostEloChange);
+
+        // Atualização do Ranking por Personagem (Character Specific Ranking)
+        if (hostCharacter && hostCharacter.trim() !== '') {
+            let hostCharRank = dbPool.prepare('SELECT * FROM character_rankings WHERE username = ? AND game_id = ? AND LOWER(character_name) = LOWER(?)').get(hostUsername, gameId, hostCharacter);
+            if (!hostCharRank) {
+                dbPool.prepare("INSERT INTO character_rankings (username, game_id, character_name, elo_rating, wins, losses, tier) VALUES (?, ?, ?, 0, 0, 0, 'Bronze')").run(hostUsername, gameId, hostCharacter);
+                hostCharRank = dbPool.prepare('SELECT * FROM character_rankings WHERE username = ? AND game_id = ? AND LOWER(character_name) = LOWER(?)').get(hostUsername, gameId, hostCharacter);
+            }
+            const hostCharElo = calculateElo(hostCharRank.elo_rating, hostRank.elo_rating, actualHostScore);
+            dbPool.prepare(`
+                UPDATE character_rankings 
+                SET elo_rating = ?, wins = wins + ?, losses = losses + ?, tier = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE username = ? AND game_id = ? AND LOWER(character_name) = LOWER(?)
+            `).run(hostCharElo, isHostWinner ? 1 : 0, isHostWinner ? 0 : 1, getEloTier(hostCharElo), hostUsername, gameId, hostCharacter);
+        }
+
+        if (guestCharacter && guestCharacter.trim() !== '') {
+            let guestCharRank = dbPool.prepare('SELECT * FROM character_rankings WHERE username = ? AND game_id = ? AND LOWER(character_name) = LOWER(?)').get(guestUsername, gameId, guestCharacter);
+            if (!guestCharRank) {
+                dbPool.prepare("INSERT INTO character_rankings (username, game_id, character_name, elo_rating, wins, losses, tier) VALUES (?, ?, ?, 0, 0, 0, 'Bronze')").run(guestUsername, gameId, guestCharacter);
+                guestCharRank = dbPool.prepare('SELECT * FROM character_rankings WHERE username = ? AND game_id = ? AND LOWER(character_name) = LOWER(?)').get(guestUsername, gameId, guestCharacter);
+            }
+            const guestCharElo = calculateElo(guestCharRank.elo_rating, guestRank.elo_rating, actualGuestScore);
+            dbPool.prepare(`
+                UPDATE character_rankings 
+                SET elo_rating = ?, wins = wins + ?, losses = losses + ?, tier = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE username = ? AND game_id = ? AND LOWER(character_name) = LOWER(?)
+            `).run(guestCharElo, isHostWinner ? 0 : 1, isHostWinner ? 1 : 0, getEloTier(guestCharElo), guestUsername, gameId, guestCharacter);
+        }
+
+        // Recalcula e atualiza o MAIN (personagem mais jogado) do Host
+        const topHostChar = dbPool.prepare(`
+            SELECT character_name FROM character_rankings 
+            WHERE username = ? AND game_id = ? 
+            ORDER BY (wins + losses) DESC, elo_rating DESC LIMIT 1
+        `).get(hostUsername, gameId);
+        if (topHostChar && topHostChar.character_name) {
+            dbPool.prepare('UPDATE rankings SET favorite_character = ? WHERE username = ? AND game_id = ?').run(topHostChar.character_name, hostUsername, gameId);
+        }
+
+        // Recalcula e atualiza o MAIN (personagem mais jogado) do Guest
+        const topGuestChar = dbPool.prepare(`
+            SELECT character_name FROM character_rankings 
+            WHERE username = ? AND game_id = ? 
+            ORDER BY (wins + losses) DESC, elo_rating DESC LIMIT 1
+        `).get(guestUsername, gameId);
+        if (topGuestChar && topGuestChar.character_name) {
+            dbPool.prepare('UPDATE rankings SET favorite_character = ? WHERE username = ? AND game_id = ?').run(topGuestChar.character_name, guestUsername, gameId);
+        }
+
+        console.log(`[Ranking] Partida registrada no ${gameId}: ${hostUsername} (${newHostElo} ELO) vs ${guestUsername} (${newGuestElo} ELO). Vencedor: ${winnerUsername}`);
+
+        return res.status(200).json({
+            sucesso: true,
+            mensagem: 'Resultado da partida registrado com sucesso!',
+            host: { username: hostUsername, elo: newHostElo, eloChange: hostEloChange, tier: newHostTier },
+            guest: { username: guestUsername, elo: newGuestElo, eloChange: guestEloChange, tier: newGuestTier }
+        });
+    } catch (err) {
+        console.error('Erro ao registrar resultado da partida:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao salvar resultado da partida.' });
+    }
+});
+
+// Endpoint para buscar a tabela de classificação (Ranking Híbrido: Geral ou por Personagem)
+app.get('/payldr/ranking', async (req, res) => {
+    try {
+        const { gameId, character } = req.query;
+        let query = '';
+        const params = [];
+
+        if (character && character.trim() !== '') {
+            query = `
+                SELECT username, game_id, character_name as favorite_character, elo_rating, wins, losses, tier,
+                       ROUND((wins * 100.0 / CASE WHEN (wins + losses) = 0 THEN 1 ELSE (wins + losses) END), 1) as winrate
+                FROM character_rankings
+                WHERE LOWER(character_name) = LOWER(?) AND elo_rating > 0
+            `;
+            params.push(character.trim());
+            if (gameId) {
+                query += ' AND game_id = ?';
+                params.push(gameId);
+            }
+        } else {
+            query = `
+                SELECT username, game_id, elo_rating, wins, losses, favorite_character, tier,
+                       ROUND((wins * 100.0 / CASE WHEN (wins + losses) = 0 THEN 1 ELSE (wins + losses) END), 1) as winrate
+                FROM rankings
+                WHERE elo_rating > 0
+            `;
+            if (gameId) {
+                query += ' AND game_id = ?';
+                params.push(gameId);
+            }
+        }
+        query += ' ORDER BY elo_rating DESC, wins DESC';
+
+        const rows = dbPool.prepare(query).all(...params);
+        return res.status(200).json({ sucesso: true, ranking: rows });
+    } catch (err) {
+        console.error('Erro ao buscar tabela de ranking:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar ranking.' });
+    }
+});
+
+// Endpoint para buscar lista de personagens que possuem ranking
+app.get('/payldr/characters', async (req, res) => {
+    try {
+        const { gameId } = req.query;
+        let query = 'SELECT DISTINCT character_name FROM character_rankings WHERE elo_rating > 0';
+        const params = [];
+        if (gameId) {
+            query += ' AND game_id = ?';
+            params.push(gameId);
+        }
+        query += ' ORDER BY character_name ASC';
+        const rows = dbPool.prepare(query).all(...params);
+        const characters = rows.map(r => r.character_name);
+        return res.status(200).json({ sucesso: true, characters });
+    } catch (err) {
+        return res.status(500).json({ sucesso: false, characters: [] });
+    }
+});
+
+// Endpoint para buscar estatísticas e histórico de um jogador
+app.get('/payldr/player-stats/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        const ranks = dbPool.prepare('SELECT * FROM rankings WHERE username = ?').all(username);
+        const history = dbPool.prepare(`
+            SELECT * FROM match_history 
+            WHERE host_username = ? OR guest_username = ? 
+            ORDER BY created_at DESC 
+            LIMIT 20
+        `).all(username, username);
+
+        return res.status(200).json({
+            sucesso: true,
+            username,
+            rankings: ranks,
+            history
+        });
+    } catch (err) {
+        console.error('Erro ao buscar estatísticas do jogador:', err.message);
+        return res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar estatísticas.' });
+    }
+});
+
 async function getCerts() {
+    try {
+        const fs = await import('fs');
+        const localFullChain = '/etc/letsencrypt/live/devserver.marketpix.com.br/fullchain.pem';
+        const localPrivKey = '/etc/letsencrypt/live/devserver.marketpix.com.br/privkey.pem';
+
+        if (fs.existsSync(localFullChain) && fs.existsSync(localPrivKey)) {
+            console.log("[SSL] Usando certificados do Let's Encrypt locais em /etc/letsencrypt/live/...");
+            return {
+                cert: fs.readFileSync(localFullChain, 'utf8'),
+                priv: fs.readFileSync(localPrivKey, 'utf8')
+            };
+        }
+    } catch (e) {
+        console.warn("[SSL] Erro ao ler certificados locais, tentando certdist:", e.message);
+    }
+
     const authName = process.env.CERT_AUTH_NAME;
     const authPass = process.env.CERT_AUTH_PASS;
 
@@ -800,8 +1094,8 @@ async function getCerts() {
     let certData = await fetch(`https://certdist.marketpix.com.br:8443/cert`, {
         method: 'GET',
         headers: headers
-    })
-    return certData.json()
+    });
+    return certData.json();
 }
 
 async function startAsync() {
