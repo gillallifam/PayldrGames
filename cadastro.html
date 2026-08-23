@@ -377,8 +377,15 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="imagem">URL da Imagem (Opcional)</label>
-                        <input type="url" id="imagem" name="imagem" placeholder="Ex: https://.../capa.jpg">
+                        <label for="imagem_retrato">Imagem Retrato (Vertical)</label>
+                        <input type="url" id="imagem_retrato" name="imagem_retrato" placeholder="URL da imagem (ex: https://...)" style="margin-bottom: 6px;">
+                        <input type="file" id="imagemRetratoFile" name="imagemRetratoFile" accept="image/*" style="padding: 8px; font-size: 0.85rem;">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="imagem_paisagem">Imagem Paisagem (Horizontal)</label>
+                        <input type="url" id="imagem_paisagem" name="imagem_paisagem" placeholder="URL da imagem (ex: https://...)" style="margin-bottom: 6px;">
+                        <input type="file" id="imagemPaisagemFile" name="imagemPaisagemFile" accept="image/*" style="padding: 8px; font-size: 0.85rem;">
                     </div>
 
                     <div class="form-group" style="justify-content: center;">
@@ -473,8 +480,9 @@
                     }
                     
                     let imageEl = '';
-                    if (game.imagem && game.imagem.trim() !== '') {
-                        imageEl = `<img class="game-img" src="${game.imagem}" alt="${game.nome}" onerror="this.onerror=null; this.outerHTML='<div class=game-img>🎮</div>';">`;
+                    const displayImg = game.imagem_retrato || game.imagem_paisagem || game.imagem;
+                    if (displayImg && displayImg.trim() !== '') {
+                        imageEl = `<img class="game-img" src="${displayImg}" alt="${game.nome}" onerror="this.onerror=null; this.outerHTML='<div class=game-img>🎮</div>';">`;
                     } else {
                         imageEl = '<div class="game-img">🎮</div>';
                     }
@@ -492,7 +500,7 @@
                             </div>
                             <a class="game-url" href="${game.url}" target="_blank">${game.url}</a>
                             <div class="game-actions">
-                                <div class="action-btn edit-btn" onclick="startEdit(${game.id}, '${encodeURIComponent(game.nome)}', '${encodeURIComponent(game.url)}', '${encodeURIComponent(game.imagem || '')}', '${game.status || 'active'}')">Editar</div>
+                                <div class="action-btn edit-btn" onclick="startEdit(${game.id}, '${encodeURIComponent(game.nome)}', '${encodeURIComponent(game.url)}', '${encodeURIComponent(game.imagem_retrato || '')}', '${encodeURIComponent(game.imagem_paisagem || '')}', '${game.status || 'active'}')">Editar</div>
                                 <div class="action-btn delete-btn" onclick="deleteGame(${game.id})">Deletar</div>
                             </div>
                         </div>
@@ -511,7 +519,8 @@
 
             const formData = new FormData();
             formData.append('nome', document.getElementById('nome').value);
-            formData.append('imagem', document.getElementById('imagem').value);
+            formData.append('imagem_retrato', document.getElementById('imagem_retrato').value);
+            formData.append('imagem_paisagem', document.getElementById('imagem_paisagem').value);
             formData.append('status', document.getElementById('status').checked ? 'active' : 'inactive');
             
             if (!urlInput.disabled) {
@@ -519,6 +528,14 @@
             }
             if (zipFileInput.files.length > 0) {
                 formData.append('zipFile', zipFileInput.files[0]);
+            }
+            const portraitFile = document.getElementById('imagemRetratoFile');
+            if (portraitFile && portraitFile.files.length > 0) {
+                formData.append('imagemRetratoFile', portraitFile.files[0]);
+            }
+            const landscapeFile = document.getElementById('imagemPaisagemFile');
+            if (landscapeFile && landscapeFile.files.length > 0) {
+                formData.append('imagemPaisagemFile', landscapeFile.files[0]);
             }
 
             const id = gameIdInput.value;
@@ -533,11 +550,13 @@
             const progressPercent = document.getElementById('progressPercent');
             const progressState = document.getElementById('progressState');
 
-            if (zipFileInput.files.length > 0) {
+            const hasUploadFiles = zipFileInput.files.length > 0 || (portraitFile && portraitFile.files.length > 0) || (landscapeFile && landscapeFile.files.length > 0);
+
+            if (hasUploadFiles) {
                 progressContainer.style.display = 'block';
                 progressBar.style.width = '0%';
                 progressPercent.innerText = '0%';
-                progressState.innerText = 'Enviando ZIP...';
+                progressState.innerText = 'Enviando arquivos...';
             }
 
             xhr.upload.addEventListener('progress', (event) => {
@@ -589,16 +608,22 @@
             xhr.send(formData);
         });
 
-        function startEdit(id, nome, url, imagem, status) {
+        function startEdit(id, nome, url, imagemRetrato, imagemPaisagem, status) {
             isEditing = true;
             gameIdInput.value = id;
             document.getElementById('nome').value = decodeURIComponent(nome);
             document.getElementById('url').value = decodeURIComponent(url);
-            document.getElementById('imagem').value = decodeURIComponent(imagem);
+            document.getElementById('imagem_retrato').value = decodeURIComponent(imagemRetrato || '');
+            document.getElementById('imagem_paisagem').value = decodeURIComponent(imagemPaisagem || '');
             document.getElementById('status').checked = (status === 'active');
             
-            // Reset ZIP field and enable URL during edit start
+            // Reset file fields and enable URL during edit start
             zipFileInput.value = '';
+            const portraitFile = document.getElementById('imagemRetratoFile');
+            if (portraitFile) portraitFile.value = '';
+            const landscapeFile = document.getElementById('imagemPaisagemFile');
+            if (landscapeFile) landscapeFile.value = '';
+
             urlInput.required = true;
             urlInput.placeholder = "Ex: https://...";
             urlInput.disabled = false;
@@ -616,8 +641,13 @@
             gameIdInput.value = '';
             document.getElementById('status').checked = true;
             
-            // Reset zip and url field states
+            // Reset file and url field states
             zipFileInput.value = '';
+            const portraitFile = document.getElementById('imagemRetratoFile');
+            if (portraitFile) portraitFile.value = '';
+            const landscapeFile = document.getElementById('imagemPaisagemFile');
+            if (landscapeFile) landscapeFile.value = '';
+
             urlInput.required = true;
             urlInput.placeholder = "Ex: https://...";
             urlInput.disabled = false;
