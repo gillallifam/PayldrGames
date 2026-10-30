@@ -134,11 +134,14 @@ async function initDatabase() {
         try { dbPool.exec("ALTER TABLE users ADD COLUMN canHost DATETIME"); } catch (e) {}
     }
 
-    // Migração para a tabela de jogos (adicionar colunas status, imagem_retrato e imagem_paisagem)
+    // Migração para a tabela de jogos (adicionar colunas status, manual_id e game_code)
     const gameColumns = dbPool.pragma('table_info(jogos)');
     const gameColNames = gameColumns.map(c => c.name);
     if (!gameColNames.includes('status')) {
         try { dbPool.exec("ALTER TABLE jogos ADD COLUMN status TEXT DEFAULT 'active'"); } catch (e) {}
+    }
+    if (!gameColNames.includes('manual_id')) {
+        try { dbPool.exec("ALTER TABLE jogos ADD COLUMN manual_id TEXT"); } catch (e) {}
     }
     if (!gameColNames.includes('imagem_retrato')) {
         try { dbPool.exec("ALTER TABLE jogos ADD COLUMN imagem_retrato TEXT"); } catch (e) {}
@@ -231,9 +234,7 @@ const upload = multer({
 });
 
 const gameUpload = upload.fields([
-    { name: 'zipFile', maxCount: 1 },
-    { name: 'imagemRetratoFile', maxCount: 1 },
-    { name: 'imagemPaisagemFile', maxCount: 1 }
+    { name: 'zipFile', maxCount: 1 }
 ]);
 
 // Helper para deletar arquivos ZIP locais antigos de jogos
@@ -248,7 +249,7 @@ function deleteGameZip(gameUrl) {
                 fs.unlinkSync(filePath);
                 console.log(`[File Cleanup] Deletado ZIP antigo: ${filePath}`);
             } catch (err) {
-                console.error(`[File Cleanup] Erro ao deletar arquivo: ${err.message}`);
+                console.error(`[File Cleanup] Erro ao deletar arquivo: ${filePath}`, err.message);
             }
         }
     }
@@ -668,7 +669,7 @@ app.post('/payldr/api/games', (req, res, next) => {
         next();
     });
 }, async (req, res) => {
-    const { nome, url, imagem, imagem_retrato, imagem_paisagem, status } = req.body;
+    const { nome, manual_id, url, status } = req.body;
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     let gameUrl = url;
@@ -680,19 +681,7 @@ app.post('/payldr/api/games', (req, res, next) => {
         return res.status(400).json({ sucesso: false, mensagem: 'Nome e URL/Arquivo ZIP são obrigatórios.' });
     }
 
-    let finalRetrato = imagem_retrato || '';
-    if (req.files && req.files.imagemRetratoFile && req.files.imagemRetratoFile[0]) {
-        finalRetrato = `${baseUrl}/payldr/static/${req.files.imagemRetratoFile[0].filename}`;
-    }
-
-    let finalPaisagem = imagem_paisagem || '';
-    if (req.files && req.files.imagemPaisagemFile && req.files.imagemPaisagemFile[0]) {
-        finalPaisagem = `${baseUrl}/payldr/static/${req.files.imagemPaisagemFile[0].filename}`;
-    }
-
-    if (!finalRetrato) finalRetrato = imagem || '';
-    if (!finalPaisagem) finalPaisagem = imagem || '';
-    const mainImagem = finalRetrato || finalPaisagem || imagem || '';
+    const cleanManualId = (manual_id || '').trim();
 
     try {
         const existing = dbPool.prepare('SELECT id FROM jogos WHERE nome = ?').get(nome);
@@ -703,7 +692,7 @@ app.post('/payldr/api/games', (req, res, next) => {
             return res.status(400).json({ sucesso: false, mensagem: 'Já existe um jogo cadastrado com este nome.' });
         }
 
-        const info = dbPool.prepare('INSERT INTO jogos (nome, url, imagem, imagem_retrato, imagem_paisagem, status) VALUES (?, ?, ?, ?, ?, ?)').run(nome, gameUrl, mainImagem, finalRetrato, finalPaisagem, status || 'active');
+        const info = dbPool.prepare('INSERT INTO jogos (nome, manual_id, url, imagem, imagem_retrato, imagem_paisagem, status) VALUES (?, ?, ?, ?, ?, ?, ?)').run(nome, cleanManualId, gameUrl, '', '', '', status || 'active');
         return res.status(200).json({ sucesso: true, id: info.lastInsertRowid });
     } catch (err) {
         console.error('Erro ao cadastrar jogo no SQLite:', err.message);
@@ -725,11 +714,11 @@ app.put('/payldr/api/games/:id', (req, res, next) => {
     });
 }, async (req, res) => {
     const { id } = req.params;
-    const { nome, url, imagem, imagem_retrato, imagem_paisagem, status } = req.body;
+    const { nome, manual_id, url, status } = req.body;
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     try {
-        const oldGame = dbPool.prepare('SELECT url, imagem_retrato, imagem_paisagem FROM jogos WHERE id = ?').get(id);
+        const oldGame = dbPool.prepare('SELECT url FROM jogos WHERE id = ?').get(id);
         if (!oldGame) {
             if (req.files && req.files.zipFile && req.files.zipFile[0]) {
                 deleteGameZip(`${baseUrl}/payldr/static/${req.files.zipFile[0].filename}`);
@@ -757,23 +746,8 @@ app.put('/payldr/api/games/:id', (req, res, next) => {
             return res.status(400).json({ sucesso: false, mensagem: 'Já existe outro jogo cadastrado com este nome.' });
         }
 
-        let finalRetrato = imagem_retrato || oldGame.imagem_retrato || '';
-        if (req.files && req.files.imagemRetratoFile && req.files.imagemRetratoFile[0]) {
-            finalRetrato = `${baseUrl}/payldr/static/${req.files.imagemRetratoFile[0].filename}`;
-            if (oldGame.imagem_retrato) deleteGameZip(oldGame.imagem_retrato);
-        }
-
-        let finalPaisagem = imagem_paisagem || oldGame.imagem_paisagem || '';
-        if (req.files && req.files.imagemPaisagemFile && req.files.imagemPaisagemFile[0]) {
-            finalPaisagem = `${baseUrl}/payldr/static/${req.files.imagemPaisagemFile[0].filename}`;
-            if (oldGame.imagem_paisagem) deleteGameZip(oldGame.imagem_paisagem);
-        }
-
-        if (!finalRetrato) finalRetrato = imagem || '';
-        if (!finalPaisagem) finalPaisagem = imagem || '';
-        const mainImagem = finalRetrato || finalPaisagem || imagem || '';
-
-        const info = dbPool.prepare('UPDATE jogos SET nome = ?, url = ?, imagem = ?, imagem_retrato = ?, imagem_paisagem = ?, status = ? WHERE id = ?').run(nome, gameUrl, mainImagem, finalRetrato, finalPaisagem, status || 'active', id);
+        const cleanManualId = (manual_id || '').trim();
+        const info = dbPool.prepare('UPDATE jogos SET nome = ?, manual_id = ?, url = ?, status = ? WHERE id = ?').run(nome, cleanManualId, gameUrl, status || 'active', id);
         return res.status(200).json({ sucesso: true });
     } catch (err) {
         console.error('Erro ao atualizar jogo no SQLite:', err.message);

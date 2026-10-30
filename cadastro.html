@@ -363,7 +363,12 @@
                 <div class="form-grid">
                     <div class="form-group">
                         <label for="nome">Nome do Jogo</label>
-                        <input type="text" id="nome" name="nome" placeholder="Ex: Ikemen GO" required>
+                        <input type="text" id="nome" name="nome" placeholder="Ex: Nostalgic Arcade" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="manual_id">ID Manual / Pasta CDN</label>
+                        <input type="text" id="manual_id" name="manual_id" placeholder="Ex: NA, MKTR, SFHD (Opcional)">
                     </div>
 
                     <div class="form-group">
@@ -376,19 +381,7 @@
                         <input type="file" id="zipFile" name="zipFile" accept=".zip" style="padding: 10px;">
                     </div>
 
-                    <div class="form-group">
-                        <label for="imagem_retrato">Imagem Retrato (Vertical)</label>
-                        <input type="url" id="imagem_retrato" name="imagem_retrato" placeholder="URL da imagem (ex: https://...)" style="margin-bottom: 6px;">
-                        <input type="file" id="imagemRetratoFile" name="imagemRetratoFile" accept="image/*" style="padding: 8px; font-size: 0.85rem;">
-                    </div>
-
-                    <div class="form-group">
-                        <label for="imagem_paisagem">Imagem Paisagem (Horizontal)</label>
-                        <input type="url" id="imagem_paisagem" name="imagem_paisagem" placeholder="URL da imagem (ex: https://...)" style="margin-bottom: 6px;">
-                        <input type="file" id="imagemPaisagemFile" name="imagemPaisagemFile" accept="image/*" style="padding: 8px; font-size: 0.85rem;">
-                    </div>
-
-                    <div class="form-group" style="justify-content: center;">
+                    <div class="form-group" style="justify-content: center; grid-column: 1 / -1;">
                         <label style="margin-bottom: 8px;">Status do Jogo</label>
                         <div style="display: flex; align-items: center; gap: 10px; margin-top: 5px;">
                             <input type="checkbox" id="status" name="status" checked style="width: auto; cursor: pointer; transform: scale(1.2);">
@@ -396,7 +389,6 @@
                         </div>
                     </div>
                 </div>
-
                 <!-- Barra de Progresso de Upload -->
                 <div id="progressContainer" style="display: none; margin-top: 20px; background: rgba(255, 255, 255, 0.03); border-radius: 12px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.08);">
                     <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #a78bfa; margin-bottom: 8px; font-weight: 600;">
@@ -479,13 +471,7 @@
                         card.style.opacity = '0.6';
                     }
                     
-                    let imageEl = '';
-                    const displayImg = game.imagem_retrato || game.imagem_paisagem || game.imagem;
-                    if (displayImg && displayImg.trim() !== '') {
-                        imageEl = `<img class="game-img" src="${displayImg}" alt="${game.nome}" onerror="this.onerror=null; this.outerHTML='<div class=game-img>🎮</div>';">`;
-                    } else {
-                        imageEl = '<div class="game-img">🎮</div>';
-                    }
+                    let imageEl = '<div class="game-img">🎮</div>';
 
                     const badgeHtml = game.status === 'inactive' 
                         ? `<span style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; width: fit-content;">Desabilitado</span>`
@@ -500,7 +486,7 @@
                             </div>
                             <a class="game-url" href="${game.url}" target="_blank">${game.url}</a>
                             <div class="game-actions">
-                                <div class="action-btn edit-btn" onclick="startEdit(${game.id}, '${encodeURIComponent(game.nome)}', '${encodeURIComponent(game.url)}', '${encodeURIComponent(game.imagem_retrato || '')}', '${encodeURIComponent(game.imagem_paisagem || '')}', '${game.status || 'active'}')">Editar</div>
+                                <div class="action-btn edit-btn" onclick="startEdit(${game.id}, '${encodeURIComponent(game.nome)}', '${encodeURIComponent(game.manual_id || '')}', '${encodeURIComponent(game.url)}', '${game.status || 'active'}')">Editar</div>
                                 <div class="action-btn delete-btn" onclick="deleteGame(${game.id})">Deletar</div>
                             </div>
                         </div>
@@ -519,8 +505,7 @@
 
             const formData = new FormData();
             formData.append('nome', document.getElementById('nome').value);
-            formData.append('imagem_retrato', document.getElementById('imagem_retrato').value);
-            formData.append('imagem_paisagem', document.getElementById('imagem_paisagem').value);
+            formData.append('manual_id', document.getElementById('manual_id').value);
             formData.append('status', document.getElementById('status').checked ? 'active' : 'inactive');
             
             if (!urlInput.disabled) {
@@ -529,14 +514,7 @@
             if (zipFileInput.files.length > 0) {
                 formData.append('zipFile', zipFileInput.files[0]);
             }
-            const portraitFile = document.getElementById('imagemRetratoFile');
-            if (portraitFile && portraitFile.files.length > 0) {
-                formData.append('imagemRetratoFile', portraitFile.files[0]);
-            }
-            const landscapeFile = document.getElementById('imagemPaisagemFile');
-            if (landscapeFile && landscapeFile.files.length > 0) {
-                formData.append('imagemPaisagemFile', landscapeFile.files[0]);
-            }
+
 
             const id = gameIdInput.value;
             const url = isEditing ? `/payldr/api/games/${id}` : '/payldr/api/games';
@@ -550,7 +528,7 @@
             const progressPercent = document.getElementById('progressPercent');
             const progressState = document.getElementById('progressState');
 
-            const hasUploadFiles = zipFileInput.files.length > 0 || (portraitFile && portraitFile.files.length > 0) || (landscapeFile && landscapeFile.files.length > 0);
+            const hasUploadFiles = zipFileInput.files.length > 0;
 
             if (hasUploadFiles) {
                 progressContainer.style.display = 'block';
@@ -608,22 +586,15 @@
             xhr.send(formData);
         });
 
-        function startEdit(id, nome, url, imagemRetrato, imagemPaisagem, status) {
+        function startEdit(id, nome, manualId, url, status) {
             isEditing = true;
             gameIdInput.value = id;
             document.getElementById('nome').value = decodeURIComponent(nome);
+            document.getElementById('manual_id').value = decodeURIComponent(manualId || '');
             document.getElementById('url').value = decodeURIComponent(url);
-            document.getElementById('imagem_retrato').value = decodeURIComponent(imagemRetrato || '');
-            document.getElementById('imagem_paisagem').value = decodeURIComponent(imagemPaisagem || '');
             document.getElementById('status').checked = (status === 'active');
             
-            // Reset file fields and enable URL during edit start
             zipFileInput.value = '';
-            const portraitFile = document.getElementById('imagemRetratoFile');
-            if (portraitFile) portraitFile.value = '';
-            const landscapeFile = document.getElementById('imagemPaisagemFile');
-            if (landscapeFile) landscapeFile.value = '';
-
             urlInput.required = true;
             urlInput.placeholder = "Ex: https://...";
             urlInput.disabled = false;
@@ -641,13 +612,7 @@
             gameIdInput.value = '';
             document.getElementById('status').checked = true;
             
-            // Reset file and url field states
             zipFileInput.value = '';
-            const portraitFile = document.getElementById('imagemRetratoFile');
-            if (portraitFile) portraitFile.value = '';
-            const landscapeFile = document.getElementById('imagemPaisagemFile');
-            if (landscapeFile) landscapeFile.value = '';
-
             urlInput.required = true;
             urlInput.placeholder = "Ex: https://...";
             urlInput.disabled = false;
